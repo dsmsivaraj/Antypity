@@ -36,6 +36,10 @@ Primary backend files:
   Records per-agent execution metrics into PostgreSQL.
 - `backend/llm_client.py`
   Wraps Azure OpenAI with lazy initialization and deterministic fallback output.
+- `backend/model_router.py`
+  Defines the model catalog and profile-aware completion routing for multi-model execution.
+- `backend/internal_api.py`
+  Provides the internal HTTP client used by the orchestrator to call agent and model APIs.
 - `backend/schemas.py`
   Defines the API contracts consumed by the frontend and tests.
 
@@ -68,7 +72,7 @@ Primary agent files:
 Primary frontend files:
 
 - `frontend/src/App.tsx`
-  Main shell for health, auth bootstrap, API key loading, task execution, workflow visibility, and history loading.
+  Bootstrap-based control plane for health, auth bootstrap, model selection, task execution, and history loading.
 - `frontend/src/api.ts`
   Typed API client and localStorage-backed API key handling.
 - `frontend/src/types.ts`
@@ -85,6 +89,7 @@ Primary frontend files:
 - `GET /ready`
 - `GET /auth/status`
 - `POST /auth/bootstrap`
+- `GET /models`
 
 ### Protected endpoints
 
@@ -230,12 +235,23 @@ The API client is the only owner of:
 
 ### Routing
 
-Routing is deterministic and score-based.
+Routing is deterministic and score-based, but orchestration now happens through internal APIs instead of direct agent function calls.
 
 - explicit `agent_name` wins if present
-- otherwise all agents score the request
+- otherwise the orchestrator calls internal score APIs for all registered agents
 - highest non-zero score wins
 - `GeneralistAgent` is the fallback baseline
+
+### Internal orchestration APIs
+
+The backend now uses internal HTTP APIs for orchestration:
+
+1. `/internal/agents/{name}/score`
+2. `/internal/agents/{name}/execute`
+3. `/internal/models`
+4. `/internal/models/complete`
+
+This keeps orchestration API-shaped and makes later externalization easier.
 
 ### Workflow execution
 
@@ -254,6 +270,17 @@ This is important because workflow steps now create:
 - normal execution rows
 - agent metrics
 - execution logs
+
+### Multi-model behavior
+
+The backend exposes a public model catalog and supports agent-level preferred model profiles.
+
+Current model profile families:
+
+- general Azure profile
+- planner Azure profile when configured
+- reviewer Azure profile when configured
+- deterministic fallback profiles
 
 ## Validation Status
 

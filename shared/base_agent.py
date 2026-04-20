@@ -21,6 +21,7 @@ class AgentMetadata:
     description: str
     capabilities: List[str]
     supports_tools: bool = False
+    preferred_model: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,17 @@ class BaseAgent(ABC):
 
     def add_skill(self, skill: Skill) -> None:
         self.skills.append(skill)
+
+    @property
+    def preferred_model(self) -> Optional[str]:
+        return self.metadata.preferred_model
+
+    def build_prompt(
+        self,
+        task: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, str]]:
+        return None
 
     @abstractmethod
     def can_handle(self, task: str, context: Optional[Dict[str, Any]] = None) -> int:

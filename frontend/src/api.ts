@@ -5,6 +5,7 @@ import type {
   ExecutionHistoryResponse,
   ExecutionResponse,
   HealthResponse,
+  ModelListResponse,
   TaskPayload,
 } from './types'
 
@@ -64,6 +65,7 @@ export const api = {
   getHealth: () => request<HealthResponse>('/health'),
   getAuthStatus: () => request<AuthStatusResponse>('/auth/status'),
   getAgents: () => request<AgentSummary[]>('/agents'),
+  getModels: () => request<ModelListResponse>('/models'),
   getExecutions: () => request<ExecutionHistoryResponse>('/executions?limit=10'),
   executeTask: (payload: TaskPayload) =>
     request<ExecutionResponse>('/execute', {

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 
+import pytest
+
 from agents.agent_orchestrator import AgentOrchestrator
 from agents.agent_registry import AgentRegistry
 from agents.agent_skills import common_skills
@@ -12,7 +14,36 @@ from backend.metrics import MetricsService
 from backend.storage import PostgreSQLExecutionStore
 
 
-def test_postgres_persists_execution_metrics_logs_and_registry(postgres_client):
+class FakeInternalAPI:
+    def __init__(self, registry: AgentRegistry) -> None:
+        self.registry = registry
+
+    async def score_agent(self, agent_name: str, task: str, context: dict) -> int:
+        agent = self.registry.get(agent_name)
+        assert agent is not None
+        return agent.can_handle(task, context)
+
+    async def execute_agent(
+        self,
+        agent_name: str,
+        task: str,
+        context: dict,
+        model_profile: str | None,
+    ) -> dict:
+        agent = self.registry.get(agent_name)
+        assert agent is not None
+        result = agent.execute(task, context)
+        return {
+            "agent_name": agent.name,
+            "output": result.output,
+            "used_llm": result.used_llm,
+            "provider": str(result.metadata.get("provider", "deterministic")),
+            "model_profile": model_profile or agent.preferred_model,
+        }
+
+
+@pytest.mark.asyncio
+async def test_postgres_persists_execution_metrics_logs_and_registry(postgres_client):
     setup_logging(postgres_client)
 
     registry = AgentRegistry()
@@ -28,8 +59,13 @@ def test_postgres_persists_execution_metrics_logs_and_registry(postgres_client):
 
     store = PostgreSQLExecutionStore(postgres_client)
     metrics = MetricsService(db=postgres_client)
-    orchestrator = AgentOrchestrator(registry=registry, store=store, metrics=metrics)
-    result = orchestrator.orchestrate("add 40 and 2")
+    orchestrator = AgentOrchestrator(
+        registry=registry,
+        store=store,
+        internal_api=FakeInternalAPI(registry),
+        metrics=metrics,
+    )
+    result = await orchestrator.orchestrate("add 40 and 2")
 
     logging.getLogger("tests.integration").info(
         "integration log for %s",

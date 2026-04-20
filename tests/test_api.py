@@ -52,6 +52,16 @@ class TestAgentRoutes:
             assert isinstance(agent["capabilities"], list)
 
 
+class TestModelRoutes:
+    def test_list_models(self, client: TestClient):
+        resp = client.get("/models")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "models" in data
+        assert len(data["models"]) >= 1
+        assert "id" in data["models"][0]
+
+
 class TestExecuteRoute:
     def test_execute_math_task(self, client: TestClient):
         resp = client.post(
@@ -64,6 +74,7 @@ class TestExecuteRoute:
         assert data["agent_name"] == "math"
         assert "30" in data["output"]
         assert data["used_llm"] is False
+        assert "model_profile" in data
 
     def test_execute_explicit_agent(self, client: TestClient):
         resp = client.post(

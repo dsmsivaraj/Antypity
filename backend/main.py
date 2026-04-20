@@ -13,6 +13,10 @@ from agents.workflow_engine import WorkflowStep
 from .container import AppContainer, build_container
 from .schemas import (
     AgentMetric,
+    AgentExecutionRequest,
+    AgentExecutionResponse,
+    AgentScoreRequest,
+    AgentScoreResponse,
     AgentSummary,
     ApiKeyBootstrapRequest,
     ApiKeyCreateRequest,
@@ -25,6 +29,10 @@ from .schemas import (
     HealthResponse,
     LogEntry,
     LogsResponse,
+    ModelCompletionRequest,
+    ModelCompletionResponse,
+    ModelListResponse,
+    ModelSummary,
     MetricsResponse,
     ReadyResponse,
     TaskRequest,
@@ -87,6 +95,16 @@ def _require(permission: str):
     return dependency
 
 
+def _require_internal(
+    request: Request,
+    x_internal_token: Optional[str] = Header(None, alias="X-Internal-Token"),
+) -> bool:
+    container: AppContainer = request.app.state.container
+    if x_internal_token != container.settings.internal_api_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid internal token.")
+    return True
+
+
 # ── App factory ──────────────────────────────────────────────────────────────
 
 def create_app(container: Optional[AppContainer] = None) -> FastAPI:
@@ -111,6 +129,7 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.container = _container
+    _container.internal_api.bind_app(app)
 
     app.add_middleware(
         CORSMiddleware,
@@ -198,9 +217,29 @@ def _register_routes(app: FastAPI) -> None:
                 description=m.description,
                 capabilities=m.capabilities,
                 supports_tools=m.supports_tools,
+                preferred_model=m.preferred_model,
             )
             for m in container.registry.list_metadata()
         ]
+
+    @app.get("/models", response_model=ModelListResponse, tags=["models"])
+    async def list_models(
+        request: Request,
+        _: dict = Depends(_require("agents:read")),
+    ):
+        container: AppContainer = request.app.state.container
+        return ModelListResponse(
+            models=[
+                ModelSummary(
+                    id=profile.id,
+                    provider=profile.provider,
+                    mode=profile.mode,
+                    description=profile.description,
+                    deployment=profile.deployment,
+                )
+                for profile in container.model_router.list_profiles()
+            ]
+        )
 
     # ── Executions ────────────────────────────────────────────────────────
 
@@ -220,6 +259,8 @@ def _register_routes(app: FastAPI) -> None:
                     status=r["status"],
                     output=r["output"],
                     used_llm=r["used_llm"],
+                    model_profile=r.get("model_profile"),
+                    provider=r.get("provider"),
                     created_at=datetime.fromisoformat(r["created_at"]),
                     context=r.get("context", {}),
                 )
@@ -235,9 +276,10 @@ def _register_routes(app: FastAPI) -> None:
     ):
         container: AppContainer = request.app.state.container
         try:
-            result = container.orchestrator.orchestrate(
+            result = await container.orchestrator.orchestrate(
                 task=body.task,
                 agent_name=body.agent_name,
+                model_profile=body.model_profile,
                 context=body.context,
             )
         except ValueError as exc:
@@ -251,6 +293,8 @@ def _register_routes(app: FastAPI) -> None:
             status=result.status,
             output=result.output,
             used_llm=result.used_llm,
+            model_profile=result.model_profile,
+            provider=result.provider,
             created_at=result.created_at,
             context=result.context,
         )
@@ -494,7 +538,7 @@ def _register_routes(app: FastAPI) -> None:
             total_steps=len(steps),
         )
 
-        result = container.workflow_executor.execute(
+        result = await container.workflow_executor.execute(
             workflow_id=body.workflow_id,
             execution_id=wf_exec["id"],
             steps=steps,
@@ -554,6 +598,98 @@ def _register_routes(app: FastAPI) -> None:
                 )
                 for r in records
             ]
+        )
+
+    # ── Internal orchestration APIs ──────────────────────────────────────
+
+    @app.get("/internal/models", response_model=ModelListResponse, include_in_schema=False)
+    async def internal_models(
+        request: Request,
+        _: bool = Depends(_require_internal),
+    ):
+        container: AppContainer = request.app.state.container
+        return ModelListResponse(
+            models=[
+                ModelSummary(
+                    id=profile.id,
+                    provider=profile.provider,
+                    mode=profile.mode,
+                    description=profile.description,
+                    deployment=profile.deployment,
+                )
+                for profile in container.model_router.list_profiles()
+            ]
+        )
+
+    @app.post("/internal/models/complete", response_model=ModelCompletionResponse, include_in_schema=False)
+    async def internal_complete_model(
+        request: Request,
+        body: ModelCompletionRequest,
+        _: bool = Depends(_require_internal),
+    ):
+        container: AppContainer = request.app.state.container
+        profile, llm_result = container.model_router.complete(
+            model_profile=body.model_profile,
+            prompt=body.prompt,
+            system_prompt=body.system_prompt,
+        )
+        return ModelCompletionResponse(
+            content=llm_result.content,
+            used_llm=llm_result.used_llm,
+            provider=llm_result.provider,
+            model_profile=profile.id,
+        )
+
+    @app.post("/internal/agents/{agent_name}/score", response_model=AgentScoreResponse, include_in_schema=False)
+    async def internal_agent_score(
+        request: Request,
+        agent_name: str,
+        body: AgentScoreRequest,
+        _: bool = Depends(_require_internal),
+    ):
+        container: AppContainer = request.app.state.container
+        agent = container.registry.get(agent_name)
+        if agent is None:
+            raise HTTPException(status_code=404, detail=f"Unknown agent '{agent_name}'.")
+        return AgentScoreResponse(
+            agent_name=agent.name,
+            score=agent.can_handle(body.task, body.context),
+        )
+
+    @app.post("/internal/agents/{agent_name}/execute", response_model=AgentExecutionResponse, include_in_schema=False)
+    async def internal_agent_execute(
+        request: Request,
+        agent_name: str,
+        body: AgentExecutionRequest,
+        _: bool = Depends(_require_internal),
+    ):
+        container: AppContainer = request.app.state.container
+        agent = container.registry.get(agent_name)
+        if agent is None:
+            raise HTTPException(status_code=404, detail=f"Unknown agent '{agent_name}'.")
+
+        prompt_bundle = agent.build_prompt(body.task, body.context)
+        if prompt_bundle is None:
+            result = agent.execute(body.task, body.context)
+            return AgentExecutionResponse(
+                agent_name=agent.name,
+                output=result.output,
+                used_llm=result.used_llm,
+                provider=str(result.metadata.get("provider", "deterministic")),
+                model_profile=body.model_profile or agent.preferred_model,
+            )
+
+        profile, llm_result = container.model_router.complete(
+            model_profile=body.model_profile or agent.preferred_model,
+            prompt=prompt_bundle["prompt"],
+            system_prompt=prompt_bundle.get("system_prompt"),
+        )
+        return AgentExecutionResponse(
+            agent_name=agent.name,
+            output=llm_result.content,
+            used_llm=llm_result.used_llm,
+            provider=llm_result.provider,
+            model_profile=profile.id,
         )
 
 

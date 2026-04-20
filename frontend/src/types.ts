@@ -3,6 +3,19 @@ export type AgentSummary = {
   description: string
   capabilities: string[]
   supports_tools: boolean
+  preferred_model?: string | null
+}
+
+export type ModelSummary = {
+  id: string
+  provider: string
+  mode: string
+  description: string
+  deployment?: string | null
+}
+
+export type ModelListResponse = {
+  models: ModelSummary[]
 }
 
 export type ExecutionResponse = {
@@ -11,6 +24,8 @@ export type ExecutionResponse = {
   status: string
   output: string
   used_llm: boolean
+  model_profile?: string | null
+  provider?: string | null
   created_at: string
   context: Record<string, unknown>
 }
@@ -47,5 +62,6 @@ export type ApiKeyCreateResponse = {
 export type TaskPayload = {
   task: string
   agent_name?: string
+  model_profile?: string
   context?: Record<string, unknown>
 }

@@ -30,7 +30,12 @@ class LLMClient:
     def client_error(self) -> Optional[str]:
         return self._client_error
 
-    def complete(self, prompt: str, system_prompt: Optional[str] = None) -> LLMResult:
+    def complete(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        deployment: Optional[str] = None,
+    ) -> LLMResult:
         if not self.enabled:
             return LLMResult(content=self._fallback(prompt), used_llm=False, provider="disabled")
 
@@ -45,7 +50,7 @@ class LLMClient:
 
         try:
             response = client.chat.completions.create(
-                model=self.settings.azure_openai_deployment,
+                model=deployment or self.settings.azure_openai_deployment,
                 messages=messages,
                 max_tokens=self.settings.max_tokens,
                 timeout=self.settings.request_timeout_seconds,

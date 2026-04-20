@@ -19,6 +19,7 @@ class GeneralistAgent(BaseAgent):
                     "platform guidance",
                     "fallback response generation",
                 ],
+                preferred_model="azure-general",
             ),
             skills=skills,
         )
@@ -27,7 +28,7 @@ class GeneralistAgent(BaseAgent):
     def can_handle(self, task: str, context: Optional[Dict] = None) -> int:
         return 40
 
-    def execute(self, task: str, context: Optional[Dict] = None) -> AgentResult:
+    def build_prompt(self, task: str, context: Optional[Dict] = None) -> Optional[Dict[str, str]]:
         context_summary = {}
         if context and self.skills:
             context_skill = next((skill for skill in self.skills if skill.name == "summarize_context"), None)
@@ -39,9 +40,17 @@ class GeneralistAgent(BaseAgent):
             f"Task:\n{task}\n\n"
             f"Context:\n{context_summary.get('context_summary', context or 'No context provided.')}"
         )
+        return {
+            "prompt": prompt,
+            "system_prompt": "Return a concise execution response with implementation-ready guidance.",
+        }
+
+    def execute(self, task: str, context: Optional[Dict] = None) -> AgentResult:
+        prompt = self.build_prompt(task, context)
+        assert prompt is not None
         llm_result = self.llm_client.complete(
-            prompt=prompt,
-            system_prompt="Return a concise execution response with implementation-ready guidance.",
+            prompt=prompt["prompt"],
+            system_prompt=prompt["system_prompt"],
         )
         return AgentResult(
             output=llm_result.content,
@@ -61,6 +70,7 @@ class PlannerAgent(BaseAgent):
                     "task decomposition",
                     "implementation sequencing",
                 ],
+                preferred_model="azure-planner",
             ),
             skills=skills,
         )
@@ -71,15 +81,23 @@ class PlannerAgent(BaseAgent):
             return 92
         return 25
 
-    def execute(self, task: str, context: Optional[Dict] = None) -> AgentResult:
+    def build_prompt(self, task: str, context: Optional[Dict] = None) -> Optional[Dict[str, str]]:
         prompt = (
             "Create a concise implementation plan with clear ordered steps.\n"
             f"Task:\n{task}\n\n"
             f"Context:\n{context or 'No context provided.'}"
         )
+        return {
+            "prompt": prompt,
+            "system_prompt": "Return an implementation plan with practical, production-minded steps.",
+        }
+
+    def execute(self, task: str, context: Optional[Dict] = None) -> AgentResult:
+        prompt = self.build_prompt(task, context)
+        assert prompt is not None
         llm_result = self.llm_client.complete(
-            prompt=prompt,
-            system_prompt="Return an implementation plan with practical, production-minded steps.",
+            prompt=prompt["prompt"],
+            system_prompt=prompt["system_prompt"],
         )
         return AgentResult(
             output=llm_result.content,
@@ -99,6 +117,7 @@ class ReviewerAgent(BaseAgent):
                     "risk identification",
                     "production-readiness review",
                 ],
+                preferred_model="azure-reviewer",
             ),
             skills=skills,
         )
@@ -109,16 +128,24 @@ class ReviewerAgent(BaseAgent):
             return 88
         return 20
 
-    def execute(self, task: str, context: Optional[Dict] = None) -> AgentResult:
+    def build_prompt(self, task: str, context: Optional[Dict] = None) -> Optional[Dict[str, str]]:
         prompt = (
             "Review the request as a senior engineer. Focus on bugs, risks, missing validation, "
             "and production readiness.\n"
             f"Task:\n{task}\n\n"
             f"Context:\n{context or 'No context provided.'}"
         )
+        return {
+            "prompt": prompt,
+            "system_prompt": "Return findings first, then concise remediation guidance.",
+        }
+
+    def execute(self, task: str, context: Optional[Dict] = None) -> AgentResult:
+        prompt = self.build_prompt(task, context)
+        assert prompt is not None
         llm_result = self.llm_client.complete(
-            prompt=prompt,
-            system_prompt="Return findings first, then concise remediation guidance.",
+            prompt=prompt["prompt"],
+            system_prompt=prompt["system_prompt"],
         )
         return AgentResult(
             output=llm_result.content,

@@ -37,6 +37,7 @@ The app becomes usable without any manual database edits.
 3. protected API calls automatically attach `X-API-Key`
 4. on success, the UI loads:
    - agents
+   - models
    - execution history
    - auth-aware status cards
 
@@ -52,12 +53,13 @@ If the API key is missing or invalid:
 1. user submits a task from the frontend
 2. frontend calls `POST /execute`
 3. backend validates auth and RBAC
-4. orchestrator resolves the target agent
-5. selected agent executes the task
-6. execution is persisted
-7. metrics are updated
-8. logs are written
-9. response is returned to the frontend
+4. orchestrator resolves the target agent through internal scoring APIs
+5. selected agent executes through an internal execution API
+6. model-backed agents call the internal model completion API
+7. execution is persisted
+8. metrics are updated
+9. logs are written
+10. response is returned to the frontend
 
 ### Persisted records
 
@@ -99,6 +101,13 @@ If the API key is missing or invalid:
 2. startup sync writes registry metadata to PostgreSQL
 3. `GET /agents` reads from PostgreSQL when available
 4. if registry sync/read fails, the API can fall back to the in-memory registry listing
+
+## Model Registry Workflow
+
+1. container builds model profiles from environment-aware settings
+2. `GET /models` exposes the catalog publicly
+3. internal model execution uses `/internal/models/complete`
+4. agents can prefer specific model profiles
 
 ## Logging Workflow
 
@@ -154,6 +163,7 @@ The current recommended validation sequence is:
    - `/health`
    - `/auth/status`
    - `/auth/bootstrap`
+   - `/models`
    - `/agents`
    - `/execute`
    - `/workflows/definitions`

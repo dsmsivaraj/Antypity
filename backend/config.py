@@ -33,6 +33,7 @@ class Settings:
     auth_enabled: bool
     default_admin_key: Optional[str]
     bootstrap_admin_token: Optional[str]
+    internal_api_token: str
     postgres_dsn: Optional[str]
     postgres_host: str
     postgres_port: int
@@ -46,6 +47,8 @@ class Settings:
     azure_openai_api_key: Optional[str]
     azure_openai_endpoint: Optional[str]
     azure_openai_deployment: Optional[str]
+    azure_openai_planner_deployment: Optional[str]
+    azure_openai_reviewer_deployment: Optional[str]
     azure_openai_api_version: str
     request_timeout_seconds: float
     max_tokens: int
@@ -72,6 +75,7 @@ class Settings:
             auth_enabled=os.getenv("AUTH_ENABLED", "true").lower() == "true",
             default_admin_key=os.getenv("DEFAULT_ADMIN_KEY"),
             bootstrap_admin_token=os.getenv("BOOTSTRAP_ADMIN_TOKEN") or os.getenv("SECRET_KEY"),
+            internal_api_token=os.getenv("INTERNAL_API_TOKEN") or os.getenv("SECRET_KEY", "change-me-in-production"),
             postgres_dsn=os.getenv("DATABASE_URL") or os.getenv("POSTGRES_DSN"),
             postgres_host=os.getenv("POSTGRES_HOST", "localhost"),
             postgres_port=int(os.getenv("POSTGRES_PORT", "5432")),
@@ -85,6 +89,8 @@ class Settings:
             azure_openai_api_key=os.getenv("AZURE_OPENAI_API_KEY"),
             azure_openai_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
             azure_openai_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
+            azure_openai_planner_deployment=os.getenv("AZURE_OPENAI_PLANNER_DEPLOYMENT"),
+            azure_openai_reviewer_deployment=os.getenv("AZURE_OPENAI_REVIEWER_DEPLOYMENT"),
             azure_openai_api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01"),
             request_timeout_seconds=float(os.getenv("REQUEST_TIMEOUT_SECONDS", "30")),
             max_tokens=int(os.getenv("MAX_TOKENS", "2000")),
@@ -105,6 +111,7 @@ class Settings:
             auth_enabled=False,
             default_admin_key=None,
             bootstrap_admin_token="test-bootstrap-token",
+            internal_api_token="test-internal-token",
             postgres_dsn=None,
             postgres_host="localhost",
             postgres_port=5432,
@@ -118,6 +125,8 @@ class Settings:
             azure_openai_api_key=None,
             azure_openai_endpoint=None,
             azure_openai_deployment=None,
+            azure_openai_planner_deployment=None,
+            azure_openai_reviewer_deployment=None,
             azure_openai_api_version="2024-02-01",
             request_timeout_seconds=5.0,
             max_tokens=500,

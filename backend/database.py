@@ -176,6 +176,8 @@ class PostgreSQLDatabaseClient:
         payload = dict(item)
         if isinstance(payload.get("created_at"), str):
             payload["created_at"] = datetime.fromisoformat(payload["created_at"])
+        valid_columns = set(self.executions.c.keys())
+        payload = {key: value for key, value in payload.items() if key in valid_columns}
         with self.engine.begin() as conn:
             conn.execute(insert(self.executions).values(**payload))
         return item

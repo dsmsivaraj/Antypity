@@ -52,7 +52,7 @@ class WorkflowExecutor:
     def __init__(self, orchestrator: AgentOrchestrator) -> None:
         self.orchestrator = orchestrator
 
-    def execute(
+    async def execute(
         self,
         workflow_id: str,
         execution_id: str,
@@ -67,7 +67,7 @@ class WorkflowExecutor:
             task = self._render_task(step.task_template, previous_output, i + 1, context)
             try:
                 step_context = {**context, **step.context}
-                orchestration = self.orchestrator.orchestrate(
+                orchestration = await self.orchestrator.orchestrate(
                     task=task,
                     agent_name=step.agent_name,
                     context=step_context,

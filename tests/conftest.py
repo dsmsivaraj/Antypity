@@ -16,9 +16,11 @@ from backend.auth import AuthService
 from backend.config import Settings
 from backend.container import AppContainer
 from backend.database import PostgreSQLDatabaseClient
+from backend.internal_api import InternalPlatformAPI
 from backend.llm_client import LLMClient, LLMResult
 from backend.main import create_app
 from backend.metrics import MetricsService
+from backend.model_router import ModelRouter
 from backend.storage import InMemoryExecutionStore
 
 
@@ -88,11 +90,20 @@ def container(
     mock_auth: AuthService,
     mock_db: MagicMock,
 ) -> AppContainer:
-    orchestrator = AgentOrchestrator(registry=registry, store=store, metrics=metrics)
+    model_router = ModelRouter(settings=test_settings, llm_client=mock_llm)
+    internal_api = InternalPlatformAPI(test_settings.internal_api_token)
+    orchestrator = AgentOrchestrator(
+        registry=registry,
+        store=store,
+        internal_api=internal_api,
+        metrics=metrics,
+    )
     workflow_executor = WorkflowExecutor(orchestrator=orchestrator)
     return AppContainer(
         settings=test_settings,
         llm_client=mock_llm,
+        model_router=model_router,
+        internal_api=internal_api,
         registry=registry,
         orchestrator=orchestrator,
         store=store,
@@ -132,6 +143,7 @@ def postgres_client(postgres_dsn: Optional[str]):
         auth_enabled=True,
         default_admin_key="act_default_test_admin",
         bootstrap_admin_token="test-bootstrap-token",
+        internal_api_token="test-internal-token",
         postgres_dsn=postgres_dsn,
         postgres_host="localhost",
         postgres_port=5432,
@@ -145,6 +157,8 @@ def postgres_client(postgres_dsn: Optional[str]):
         azure_openai_api_key=None,
         azure_openai_endpoint=None,
         azure_openai_deployment=None,
+        azure_openai_planner_deployment=None,
+        azure_openai_reviewer_deployment=None,
         azure_openai_api_version="2024-02-01",
         request_timeout_seconds=5.0,
         max_tokens=500,

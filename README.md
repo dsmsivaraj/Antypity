@@ -13,7 +13,7 @@ Antypity contains the Actypity production-ready application base for building ag
 - Deterministic agent routing with a pluggable LLM adapter
 - Safe startup behavior when Azure OpenAI or PostgreSQL are not configured
 - PostgreSQL-ready execution persistence with environment-driven local or cloud connectivity
-- Typed React frontend with an API client, execution workspace, registry view, and history panel
+- Typed React frontend with a Bootstrap-based control plane, model catalog, execution workspace, registry view, and history panel
 - Docker and Kubernetes manifests aligned to the same runtime contract
 
 ## Repository assets
@@ -168,6 +168,7 @@ See [VALIDATION_REPORT.md](./VALIDATION_REPORT.md) for the detailed report.
 - `GET /ready`
 - `GET /auth/status`
 - `POST /auth/bootstrap`
+- `GET /models`
 - `GET /agents`
 - `GET /executions`
 - `POST /execute`
@@ -189,6 +190,15 @@ When auth is enabled and no API keys exist yet:
 5. use that value as `X-API-Key` for protected endpoints
 
 The frontend already supports this bootstrap and API-key loading flow.
+
+## Multi-agent and multi-model orchestration
+
+The backend now supports:
+
+- multi-agent routing through internal score and execution APIs
+- multi-model selection through a public model catalog
+- agent-specific preferred model profiles
+- workflow execution that uses the same API-driven orchestration path as direct task execution
 
 ## Suggested next layers for product teams
 

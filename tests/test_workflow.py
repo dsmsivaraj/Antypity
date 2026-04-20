@@ -1,23 +1,47 @@
 """Unit tests for WorkflowExecutor."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
 
+from agents.agent_orchestrator import AgentOrchestrator
 from agents.agent_registry import AgentRegistry
 from agents.agent_skills import common_skills
 from agents.example_agent import MathAgent
-from agents.agent_orchestrator import AgentOrchestrator
+from agents.workflow_engine import WorkflowExecutor, WorkflowStep
 from backend.metrics import MetricsService
 from backend.storage import InMemoryExecutionStore
-from agents.workflow_engine import WorkflowExecutor, WorkflowStep
 from shared.base_agent import AgentMetadata, AgentResult, BaseAgent
 
 
-class _GreetAgent(BaseAgent):
-    """Deterministic test agent that greets."""
+class FakeInternalAPI:
+    def __init__(self, registry: AgentRegistry) -> None:
+        self.registry = registry
 
+    async def score_agent(self, agent_name: str, task: str, context: dict) -> int:
+        agent = self.registry.get(agent_name)
+        assert agent is not None
+        return agent.can_handle(task, context)
+
+    async def execute_agent(
+        self,
+        agent_name: str,
+        task: str,
+        context: dict,
+        model_profile: str | None,
+    ) -> dict:
+        agent = self.registry.get(agent_name)
+        assert agent is not None
+        result = agent.execute(task, context)
+        return {
+            "agent_name": agent.name,
+            "output": result.output,
+            "used_llm": result.used_llm,
+            "provider": str(result.metadata.get("provider", "deterministic")),
+            "model_profile": model_profile or agent.preferred_model,
+        }
+
+
+class _GreetAgent(BaseAgent):
     def __init__(self):
         super().__init__(
             metadata=AgentMetadata(
@@ -35,8 +59,6 @@ class _GreetAgent(BaseAgent):
 
 
 class _EchoAgent(BaseAgent):
-    """Echoes the task back — useful for testing template substitution."""
-
     def __init__(self):
         super().__init__(
             metadata=AgentMetadata(
@@ -67,75 +89,84 @@ def executor(registry):
     orchestrator = AgentOrchestrator(
         registry=registry,
         store=InMemoryExecutionStore(),
+        internal_api=FakeInternalAPI(registry),
         metrics=MetricsService(db=None),
     )
     return WorkflowExecutor(orchestrator=orchestrator)
 
 
 class TestWorkflowExecution:
-    def test_single_step_completes(self, executor):
+    @pytest.mark.asyncio
+    async def test_single_step_completes(self, executor):
         steps = [WorkflowStep(task_template="add 3 and 7")]
-        result = executor.execute("wf-1", "exec-1", steps)
+        result = await executor.execute("wf-1", "exec-1", steps)
         assert result.status == "completed"
         assert len(result.steps) == 1
         assert "10" in result.final_output
         assert result.steps[0].execution_id
 
-    def test_multi_step_passes_output_forward(self, executor):
+    @pytest.mark.asyncio
+    async def test_multi_step_passes_output_forward(self, executor):
         steps = [
             WorkflowStep(task_template="add 5 and 5"),
-            # Explicitly use echo agent so numbers in previous_output don't cause math agent to win
             WorkflowStep(task_template="Previous result was: {previous_output}", agent_name="echo"),
         ]
-        result = executor.execute("wf-1", "exec-1", steps)
+        result = await executor.execute("wf-1", "exec-1", steps)
         assert result.status == "completed"
         assert "Previous result was:" in result.final_output
 
-    def test_explicit_agent_name_in_step(self, executor):
+    @pytest.mark.asyncio
+    async def test_explicit_agent_name_in_step(self, executor):
         steps = [WorkflowStep(task_template="greet the user", agent_name="greeter")]
-        result = executor.execute("wf-1", "exec-1", steps)
+        result = await executor.execute("wf-1", "exec-1", steps)
         assert result.status == "completed"
         assert result.steps[0].agent_name == "greeter"
         assert result.steps[0].output == "Hello!"
 
-    def test_unknown_agent_name_fails_workflow(self, executor):
+    @pytest.mark.asyncio
+    async def test_unknown_agent_name_fails_workflow(self, executor):
         steps = [WorkflowStep(task_template="do something", agent_name="ghost")]
-        result = executor.execute("wf-1", "exec-1", steps)
+        result = await executor.execute("wf-1", "exec-1", steps)
         assert result.status == "failed"
         assert result.error is not None
 
-    def test_no_viable_agent_fails_workflow(self, executor):
+    @pytest.mark.asyncio
+    async def test_no_viable_agent_fails_workflow(self, executor):
         empty_registry = AgentRegistry()
         empty_executor = WorkflowExecutor(
             orchestrator=AgentOrchestrator(
                 registry=empty_registry,
                 store=InMemoryExecutionStore(),
+                internal_api=FakeInternalAPI(empty_registry),
                 metrics=MetricsService(db=None),
             )
         )
         steps = [WorkflowStep(task_template="something")]
-        result = empty_executor.execute("wf-1", "exec-1", steps)
+        result = await empty_executor.execute("wf-1", "exec-1", steps)
         assert result.status == "failed"
 
-    def test_step_results_recorded(self, executor):
+    @pytest.mark.asyncio
+    async def test_step_results_recorded(self, executor):
         steps = [
             WorkflowStep(task_template="add 1 and 2"),
             WorkflowStep(task_template="add 3 and 4"),
         ]
-        result = executor.execute("wf-1", "exec-1", steps)
+        result = await executor.execute("wf-1", "exec-1", steps)
         assert len(result.steps) == 2
         for step_result in result.steps:
             assert step_result.success is True
 
-    def test_initial_context_available_in_template(self, executor):
+    @pytest.mark.asyncio
+    async def test_initial_context_available_in_template(self, executor):
         steps = [WorkflowStep(task_template="echo {user}")]
-        result = executor.execute(
+        result = await executor.execute(
             "wf-1", "exec-1", steps, initial_context={"user": "alice"}
         )
         assert result.status == "completed"
         assert "alice" in result.final_output
 
-    def test_step_context_merged_with_global(self, executor):
+    @pytest.mark.asyncio
+    async def test_step_context_merged_with_global(self, executor):
         steps = [
             WorkflowStep(
                 task_template="greet {name}",
@@ -143,10 +174,11 @@ class TestWorkflowExecution:
                 context={"name": "bob"},
             )
         ]
-        result = executor.execute("wf-1", "exec-1", steps)
+        result = await executor.execute("wf-1", "exec-1", steps)
         assert result.status == "completed"
 
-    def test_failed_step_stops_workflow(self, executor):
+    @pytest.mark.asyncio
+    async def test_failed_step_stops_workflow(self):
         class _BoomAgent(BaseAgent):
             def __init__(self):
                 super().__init__(
@@ -165,6 +197,7 @@ class TestWorkflowExecution:
             orchestrator=AgentOrchestrator(
                 registry=reg,
                 store=InMemoryExecutionStore(),
+                internal_api=FakeInternalAPI(reg),
                 metrics=MetricsService(db=None),
             )
         )
@@ -172,6 +205,6 @@ class TestWorkflowExecution:
             WorkflowStep(task_template="first step"),
             WorkflowStep(task_template="second step should not run"),
         ]
-        result = broken.execute("wf-1", "exec-1", steps)
+        result = await broken.execute("wf-1", "exec-1", steps)
         assert result.status == "failed"
-        assert len(result.steps) == 1  # stopped after first failure
+        assert len(result.steps) == 1

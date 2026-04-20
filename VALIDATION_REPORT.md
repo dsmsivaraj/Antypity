@@ -10,6 +10,8 @@ Validated the Actypity application end to end across:
 - backend unit and API tests
 - PostgreSQL integration tests
 - live authenticated workflow against the local PostgreSQL-backed application
+- Bootstrap-based frontend modernization
+- API-driven multi-agent and multi-model orchestration
 
 ## Issues Found And Fixed
 
@@ -35,6 +37,30 @@ Fix:
 
 - aligned the effect dependency with the live API key state so lint is clean and protected data reloads consistently
 
+### 3. Direct-function orchestration gap
+
+Problem:
+
+- orchestration previously used direct agent function calls and a single local model path
+
+Fix:
+
+- added internal agent scoring and execution APIs
+- added internal model catalog and completion APIs
+- updated direct task execution and workflow execution to use the internal API contract
+
+### 4. Frontend modernization gap
+
+Problem:
+
+- the original frontend used a custom shell and did not expose model orchestration controls
+
+Fix:
+
+- rebuilt the primary UI around Bootstrap
+- added model catalog loading and model profile selection
+- modernized the dashboard with Bootstrap cards, alerts, tables, and responsive layout
+
 ## Test Results
 
 ### Static validation
@@ -51,7 +77,7 @@ Command category:
 
 Result:
 
-- `98 passed`
+- `97 passed`
 
 ### PostgreSQL integration tests
 
@@ -76,19 +102,20 @@ Validated successfully:
 1. `GET /health`
 2. `GET /auth/status`
 3. `POST /auth/bootstrap`
-4. `GET /agents`
-5. `POST /execute`
-6. `POST /workflows/definitions`
-7. `POST /workflows/execute`
-8. `GET /metrics`
-9. `GET /logs`
-10. `GET /executions`
-11. `GET /workflows/executions`
-12. `GET /logs?execution_id=<id>`
+4. `GET /models`
+5. `GET /agents`
+6. `POST /execute`
+7. `POST /workflows/definitions`
+8. `POST /workflows/execute`
+9. `GET /metrics`
+10. `GET /logs`
+11. `GET /executions`
+12. `GET /workflows/executions`
 
 Observed results:
 
 - first admin bootstrap succeeded
+- model catalog was exposed successfully
 - protected endpoints authorized correctly with `X-API-Key`
 - task execution succeeded
 - workflow definition creation succeeded

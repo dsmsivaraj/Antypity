@@ -12,9 +12,11 @@ from agents.workflow_engine import WorkflowExecutor
 from .auth import AuthService
 from .config import Settings, get_settings
 from .database import PostgreSQLDatabaseClient
+from .internal_api import InternalPlatformAPI
 from .llm_client import LLMClient
 from .log_handler import setup_logging
 from .metrics import MetricsService
+from .model_router import ModelRouter
 from .storage import ExecutionStore, build_execution_store
 
 _logger = logging.getLogger(__name__)
@@ -24,6 +26,8 @@ _logger = logging.getLogger(__name__)
 class AppContainer:
     settings: Settings
     llm_client: LLMClient
+    model_router: ModelRouter
+    internal_api: InternalPlatformAPI
     registry: AgentRegistry
     orchestrator: AgentOrchestrator
     store: ExecutionStore
@@ -42,6 +46,8 @@ def build_container() -> AppContainer:
     setup_logging(database_client)
 
     llm_client = LLMClient(settings)
+    model_router = ModelRouter(settings=settings, llm_client=llm_client)
+    internal_api = InternalPlatformAPI(internal_token=settings.internal_api_token)
     metrics_service = MetricsService(db=database_client if database_client.is_configured else None)
     auth_service = AuthService(db=database_client, config_enabled=settings.auth_enabled)
 
@@ -52,7 +58,12 @@ def build_container() -> AppContainer:
     registry.register(MathAgent(skills=common_skills))
 
     store = build_execution_store(settings, database_client=database_client)
-    orchestrator = AgentOrchestrator(registry=registry, store=store, metrics=metrics_service)
+    orchestrator = AgentOrchestrator(
+        registry=registry,
+        store=store,
+        internal_api=internal_api,
+        metrics=metrics_service,
+    )
     workflow_executor = WorkflowExecutor(orchestrator=orchestrator)
 
     # Sync in-memory registry to PostgreSQL for audit/visibility.
@@ -65,6 +76,8 @@ def build_container() -> AppContainer:
     return AppContainer(
         settings=settings,
         llm_client=llm_client,
+        model_router=model_router,
+        internal_api=internal_api,
         registry=registry,
         orchestrator=orchestrator,
         store=store,
