@@ -2,6 +2,11 @@
 
 Antypity contains the Actypity production-ready application base for building agent-enabled products with a FastAPI backend and a React frontend.
 
+[![CI](https://github.com/dsmsivaraj/Antypity/actions/workflows/ci.yml/badge.svg)](https://github.com/dsmsivaraj/Antypity/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](./backend/requirements.txt)
+[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=111827)](./frontend/package.json)
+
 ## What is included
 
 - FastAPI app factory with health, readiness, agent registry, execution, and history endpoints
@@ -11,12 +16,37 @@ Antypity contains the Actypity production-ready application base for building ag
 - Typed React frontend with an API client, execution workspace, registry view, and history panel
 - Docker and Kubernetes manifests aligned to the same runtime contract
 
+## Repository assets
+
+- [Contribution Guide](./CONTRIBUTING.md)
+- [License](./LICENSE)
+- [Application Knowledge](./APPLICATION_KNOWLEDGE.md)
+- [Application Skills](./APPLICATION_SKILLS.md)
+- [Application Workflow](./APPLICATION_WORKFLOW.md)
+- [Validation Report](./VALIDATION_REPORT.md)
+
 ## Engineering references
 
 - [Application Knowledge](./APPLICATION_KNOWLEDGE.md)
 - [Application Skills](./APPLICATION_SKILLS.md)
 - [Application Workflow](./APPLICATION_WORKFLOW.md)
 - [Validation Report](./VALIDATION_REPORT.md)
+
+## Screenshot
+
+![Antypity UI](./docs/assets/antypity-hero.png)
+
+## Quick start
+
+### Local full stack
+
+1. Configure `.env`
+2. Start the backend:
+   `./run_backend.sh`
+3. Start the frontend:
+   `cd frontend && npm install && npm run dev`
+4. Open:
+   `http://localhost:5173`
 
 ## Runtime contract
 
@@ -88,6 +118,13 @@ or:
 
 - `APP_STORAGE_BACKEND=memory`
 
+### Current validated local PostgreSQL setup
+
+```env
+APP_STORAGE_BACKEND=postgres
+DATABASE_URL=postgresql+psycopg:///actypity?host=/tmp&user=kdn_aisivarajm
+```
+
 ## Frontend setup
 
 1. Install dependencies:
@@ -111,6 +148,19 @@ Services:
 
 - Backend: `http://localhost:8000`
 - Frontend: `http://localhost:4173`
+
+## Validation summary
+
+The current baseline has been validated with:
+
+- backend compile checks
+- frontend lint
+- frontend production build
+- backend unit and API tests
+- PostgreSQL integration tests
+- a live authenticated workflow covering bootstrap, execution, workflows, metrics, logs, and history
+
+See [VALIDATION_REPORT.md](./VALIDATION_REPORT.md) for the detailed report.
 
 ## API surface
 
