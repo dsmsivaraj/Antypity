@@ -75,6 +75,8 @@ async def test_postgres_persists_execution_metrics_logs_and_registry(postgres_cl
 
     executions = postgres_client.list_executions()
     assert executions[0]["execution_id"] == result.execution_id
+    assert "model_profile" in executions[0]
+    assert "provider" in executions[0]
 
     metrics_rows = postgres_client.list_metrics()
     assert metrics_rows[0]["agent_name"] == "math"

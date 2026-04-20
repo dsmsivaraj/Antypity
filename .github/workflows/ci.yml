@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
 name: CI
 
 on:
@@ -56,6 +57,8 @@ jobs:
           python -m py_compile backend/auth.py
           python -m py_compile backend/log_handler.py
           python -m py_compile backend/metrics.py
+          python -m py_compile backend/model_router.py
+          python -m py_compile backend/internal_api.py
           python -m py_compile backend/storage.py
           python -m py_compile backend/schemas.py
           python -m py_compile agents/agent_orchestrator.py

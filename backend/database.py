@@ -53,6 +53,8 @@ class PostgreSQLDatabaseClient:
             _str("status", nullable=False),
             Column("output", String, nullable=False),
             Column("used_llm", Boolean, nullable=False),
+            Column("model_profile", String, nullable=True),
+            Column("provider", String, nullable=True),
             Column("created_at", DateTime(timezone=True), nullable=False),
             Column("context", JSON, nullable=False),
         )
@@ -449,9 +451,8 @@ class PostgreSQLDatabaseClient:
         return _serialize(dict(row)) if row else None
 
     def reset_all(self) -> None:
-        with self.engine.begin() as conn:
-            for table in reversed(self._metadata.sorted_tables):
-                conn.execute(table.delete())
+        self._metadata.drop_all(self.engine)
+        self._metadata.create_all(self.engine)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

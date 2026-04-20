@@ -16,12 +16,12 @@ Engineering skills and playbooks: `APPLICATION_SKILLS.md`
 ## Repository layout
 
 ```
-backend/          FastAPI app, container, config, LLM client, storage, schemas
+backend/          FastAPI app, container, config, LLM client, model router, internal API, storage, schemas
 agents/           Agent registry, orchestrator, skill definitions, agent implementations
 shared/           BaseAgent ABC, Skill, AgentMetadata, AgentResult
 frontend/src/     React app, typed API client, TypeScript types, CSS
 k8s/              Kubernetes manifests
-scripts/          Git wrapper utility
+tests/            pytest suite (99 tests, unit + PostgreSQL integration)
 ```
 
 ---
@@ -68,22 +68,24 @@ The current `.env` has stale Cosmos DB vars — ignore them. See `APPLICATION_KN
 3. **LLM is optional** — `LLMClient.complete()` always returns an `LLMResult`; callers must handle `used_llm=False`
 4. **Storage is swappable** — `APP_STORAGE_BACKEND`: `memory` | `json` | `postgres`
 5. **Typed contracts** — any API schema change requires updating both `backend/schemas.py` and `frontend/src/types.ts`
+6. **Internal orchestration via ASGI** — the orchestrator calls agents through `InternalPlatformAPI` using httpx ASGI transport, not direct function calls
 
 ---
 
-## Known gaps (do not need re-discovery)
+## Known gaps
 
-| ID | Issue | File |
-|---|---|---|
-| G1 | `LLMClient.complete()` live API call not in try/except | `backend/llm_client.py:51` |
-| G2 | `max_tokens=900` hardcoded | `backend/llm_client.py:53` |
-| G3 | `.env` has stale Cosmos DB vars | `.env` |
-| G4 | `azure-identity` in requirements but never used | `backend/requirements.txt` |
-| G5 | `Dockerfile.backend` missing `PYTHONPATH` env var | `Dockerfile.backend` |
-| G6 | No auth on any endpoint | `backend/main.py` |
-| G7 | No test suite | entire project |
-| G8 | `GeneralistAgent.can_handle()` always returns 40 regardless of task | `agents/example_agent.py:28` |
-| G9 | K8s `secrets.yaml` has placeholder base64 values | `k8s/secrets.yaml` |
+| ID | Issue | File | Status |
+|---|---|---|---|
+| G1 | `LLMClient.complete()` live API call not in try/except | `backend/llm_client.py` | **FIXED** |
+| G2 | `max_tokens` driven by `MAX_TOKENS` env var (default 2000) | `backend/config.py` | Open — adjust via env |
+| G3 | `.env` has stale Cosmos DB vars | `.env` | Open — ignore stale vars |
+| G4 | `azure-identity` in requirements but never used | `backend/requirements.txt` | Open |
+| G5 | `Dockerfile.backend` missing `PYTHONPATH` env var | `Dockerfile.backend` | **FIXED** |
+| G6 | No auth on any endpoint | `backend/main.py` | **FIXED** — RBAC via X-API-Key |
+| G7 | No test suite | entire project | **FIXED** — 99 tests |
+| G8 | `GeneralistAgent.can_handle()` always returns 40 | `agents/example_agent.py` | Open by design (catch-all) |
+| G9 | K8s `secrets.yaml` has placeholder base64 values | `k8s/secrets.yaml` | Open — fill before deploy |
+| G10 | No formal migration framework; schema changes use `reset_all()` in tests | `backend/database.py` | Open |
 
 ---
 
@@ -107,16 +109,23 @@ registry.register(MyAgent())
 ## Validation commands
 
 ```bash
-# Backend compile check
-python -m py_compile backend/main.py agents/agent_orchestrator.py
+# Full compile check
+PYTHONPATH=. python -m py_compile backend/main.py backend/container.py backend/config.py \
+  backend/database.py backend/auth.py backend/log_handler.py backend/metrics.py \
+  backend/model_router.py backend/internal_api.py backend/storage.py backend/schemas.py \
+  agents/agent_orchestrator.py agents/agent_registry.py agents/example_agent.py \
+  agents/agent_skills.py agents/workflow_engine.py shared/base_agent.py
 
 # Backend import check
 PYTHONPATH=. python -c "from backend.main import app; print('ok')"
 
+# Full test suite
+PYTHONPATH=. pytest tests/ -q
+
 # Frontend
 cd frontend && npm run lint && npm run build
 
-# Smoke test (backend running)
+# Smoke test (backend running, auth disabled or X-API-Key provided)
 curl http://localhost:8000/health
 curl -X POST http://localhost:8000/execute \
   -H 'Content-Type: application/json' \

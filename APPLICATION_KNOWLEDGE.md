@@ -6,7 +6,7 @@ Actypity is a production-ready base for agent-enabled applications with:
 
 - a FastAPI backend
 - a React and TypeScript frontend
-- a deterministic multi-agent orchestration layer
+- a deterministic multi-agent orchestration layer with internal ASGI-based API routing
 - optional Azure OpenAI augmentation with deterministic fallback
 - PostgreSQL-backed persistence for executions, auth, logs, metrics, registry, and workflows
 
@@ -21,25 +21,25 @@ Primary backend files:
 - `backend/main.py`
   Owns the FastAPI app factory, lifecycle, and API routes.
 - `backend/container.py`
-  Builds the application container and wires settings, auth, logging, database, metrics, registry, orchestrator, and workflow executor.
+  Builds the application container and wires settings, auth, logging, database, metrics, model router, internal API, registry, orchestrator, and workflow executor.
 - `backend/config.py`
   Defines typed environment-driven settings for local and cloud deployments.
 - `backend/database.py`
-  Owns PostgreSQL connectivity, schema bootstrap, and repository-style persistence methods.
+  Owns PostgreSQL connectivity, schema bootstrap, `reset_all()` for test isolation, and repository-style persistence methods.
 - `backend/storage.py`
-  Implements execution history backends and selects the active store.
+  Implements execution history backends (`InMemoryExecutionStore`, `JsonExecutionStore`, `PostgreSQLExecutionStore`) and selects the active store via `build_execution_store()`.
 - `backend/auth.py`
   Implements API-key auth, RBAC, and first-admin bootstrap logic.
 - `backend/log_handler.py`
-  Persists application logs into PostgreSQL.
+  Persists application logs into PostgreSQL via `PostgreSQLLogHandler`. Filters `backend.database` and `sqlalchemy` loggers to prevent recursion.
 - `backend/metrics.py`
-  Records per-agent execution metrics into PostgreSQL.
+  Records per-agent execution metrics into PostgreSQL via upsert.
 - `backend/llm_client.py`
-  Wraps Azure OpenAI with lazy initialization and deterministic fallback output.
+  Wraps Azure OpenAI with lazy initialization, try/except on API calls, and deterministic fallback output.
 - `backend/model_router.py`
-  Defines the model catalog and profile-aware completion routing for multi-model execution.
+  Defines the model catalog (`ModelProfile`) and profile-aware completion routing. Builds profiles from settings (azure-general, azure-planner, azure-reviewer, fallback profiles). Used by `GET /models` and `POST /internal/models/complete`.
 - `backend/internal_api.py`
-  Provides the internal HTTP client used by the orchestrator to call agent and model APIs.
+  Provides the internal API client (`InternalPlatformAPI`) used by the orchestrator. Uses httpx with ASGI transport to call the FastAPI app in-process — no network round-trip. Protected by `X-Internal-Token`.
 - `backend/schemas.py`
   Defines the API contracts consumed by the frontend and tests.
 
@@ -48,24 +48,24 @@ Primary backend files:
 Primary agent files:
 
 - `agents/agent_registry.py`
-  Registers and resolves agents.
+  Registers and resolves agents by name.
 - `agents/agent_orchestrator.py`
-  Routes tasks, executes agents, persists execution history, and records metrics.
+  Routes tasks, executes agents via `InternalPlatformAPI`, persists execution history, and records metrics. `orchestrate()` is async.
 - `agents/example_agent.py`
   Contains the current production baseline agents:
-  - `GeneralistAgent`
-  - `PlannerAgent`
-  - `ReviewerAgent`
-  - `MathAgent`
+  - `GeneralistAgent` — score 40 catch-all; preferred model `azure-general`; uses `build_prompt()` → LLM
+  - `PlannerAgent` — score 92 for plan/roadmap/steps keywords, 25 baseline; preferred model `azure-planner`
+  - `ReviewerAgent` — score 88 for review/bug/risk/audit keywords, 20 baseline; preferred model `azure-reviewer`
+  - `MathAgent` — score 90 for arithmetic keywords, 70 for 2+ numbers; deterministic, no LLM
 - `agents/workflow_engine.py`
-  Executes workflow definitions step by step through the orchestrator so workflow steps also create execution records, metrics, and logs.
+  Executes workflow definitions step by step through the orchestrator so workflow steps also create execution records, metrics, and logs. Supports `{previous_output}` template interpolation.
 - `agents/agent_skills.py`
-  Defines deterministic reusable skills.
+  Defines deterministic reusable skills (`summarize_context`, `add_numbers`).
 
 ### Shared Layer
 
 - `shared/base_agent.py`
-  Defines `BaseAgent`, `AgentMetadata`, `AgentResult`, and `Skill`.
+  Defines `BaseAgent`, `AgentMetadata`, `AgentResult`, and `Skill`. `AgentMetadata` has `preferred_model: Optional[str]`. `BaseAgent` has `build_prompt()` returning `Optional[Dict[str, str]]` — if non-None, the internal execute route uses the model router instead of calling `agent.execute()` directly.
 
 ### Frontend
 
@@ -89,13 +89,11 @@ Primary frontend files:
 - `GET /ready`
 - `GET /auth/status`
 - `POST /auth/bootstrap`
-- `GET /models`
 
-### Protected endpoints
-
-All protected endpoints require `X-API-Key`.
+### Protected endpoints (require `X-API-Key`)
 
 - `GET /agents`
+- `GET /models`
 - `GET /executions`
 - `POST /execute`
 - `POST /auth/keys`
@@ -107,6 +105,13 @@ All protected endpoints require `X-API-Key`.
 - `GET /workflows/definitions`
 - `POST /workflows/execute`
 - `GET /workflows/executions`
+
+### Internal endpoints (require `X-Internal-Token`, not in OpenAPI schema)
+
+- `POST /internal/agents/{name}/score`
+- `POST /internal/agents/{name}/execute`
+- `GET /internal/models`
+- `POST /internal/models/complete`
 
 ## Authentication And RBAC
 
@@ -133,12 +138,9 @@ Bootstrap token source:
 
 ### Roles
 
-- `admin`
-  Unrestricted access
-- `operator`
-  Execution, workflow execution, logs read, metrics read, and registry/history read
-- `viewer`
-  Read-only access to registry, history, logs, metrics, and workflow history
+- `admin` — unrestricted access
+- `operator` — execute, workflow execute, logs read, metrics read, registry/history read
+- `viewer` — read-only access to registry, history, logs, metrics, and workflow history
 
 ## Runtime Contract
 
@@ -157,23 +159,19 @@ When ports change, update:
 
 ## PostgreSQL Persistence Map
 
-The platform now stores operational state in PostgreSQL instead of local-only files.
+Persisted entities and their tables:
 
-Persisted entities:
+| Entity | Table | Key fields |
+|---|---|---|
+| Execution history | `executions` | execution_id, agent_name, status, output, used_llm, model_profile, provider, created_at, context |
+| API keys | `api_keys` | id, name, key_hash (SHA-256), role, created_at, is_active |
+| Agent registry | `agent_registry` | name, description, capabilities, supports_tools, agent_class, is_active |
+| Execution logs | `execution_logs` | id, execution_id, level, logger, message, agent_name, timestamp |
+| Agent metrics | `agent_metrics` | agent_name, total_executions, llm_executions, failed_executions, last_executed_at |
+| Workflow definitions | `workflow_definitions` | id, name, description, steps (JSON), created_by, created_at |
+| Workflow executions | `workflow_executions` | id, workflow_id, status, current_step, total_steps, results (JSON), error |
 
-- execution history
-- API keys
-- agent registry records
-- execution logs
-- agent metrics
-- workflow definitions
-- workflow executions
-
-The database client supports:
-
-- local PostgreSQL via explicit host/port settings
-- cloud PostgreSQL via `DATABASE_URL` or `POSTGRES_DSN`
-- automatic table bootstrap on connect
+Schema is bootstrapped via SQLAlchemy `create_all()` on first connect. `reset_all()` drops and recreates all tables — for test isolation only.
 
 ## Environment Variables
 
@@ -185,6 +183,7 @@ APP_VERSION=2.0.0
 DEBUG=false
 SECRET_KEY=change-me-in-production
 BOOTSTRAP_ADMIN_TOKEN=
+INTERNAL_API_TOKEN=
 API_HOST=0.0.0.0
 API_PORT=8000
 CORS_ORIGINS=http://localhost:5173,http://localhost:4173
@@ -212,6 +211,8 @@ POSTGRES_SSLMODE=
 AZURE_OPENAI_API_KEY=
 AZURE_OPENAI_ENDPOINT=
 AZURE_OPENAI_DEPLOYMENT=
+AZURE_OPENAI_PLANNER_DEPLOYMENT=
+AZURE_OPENAI_REVIEWER_DEPLOYMENT=
 AZURE_OPENAI_API_VERSION=2024-02-01
 ```
 
@@ -235,52 +236,38 @@ The API client is the only owner of:
 
 ### Routing
 
-Routing is deterministic and score-based, but orchestration now happens through internal APIs instead of direct agent function calls.
+Routing is deterministic and score-based. The orchestrator calls internal ASGI score APIs for all registered agents, picks the highest non-zero score, and executes via the internal execute API.
 
-- explicit `agent_name` wins if present
-- otherwise the orchestrator calls internal score APIs for all registered agents
+- explicit `agent_name` wins if present and registered
+- otherwise all registered agents are scored via `/internal/agents/{name}/score`
 - highest non-zero score wins
-- `GeneralistAgent` is the fallback baseline
+- `GeneralistAgent` (score 40) is the catch-all baseline
 
-### Internal orchestration APIs
+### Internal orchestration flow
 
-The backend now uses internal HTTP APIs for orchestration:
-
-1. `/internal/agents/{name}/score`
-2. `/internal/agents/{name}/execute`
-3. `/internal/models`
-4. `/internal/models/complete`
-
-This keeps orchestration API-shaped and makes later externalization easier.
+1. `AgentOrchestrator.orchestrate()` calls `InternalPlatformAPI.score_agent()` for each agent
+2. `InternalPlatformAPI` uses httpx ASGI transport to hit `/internal/agents/{name}/score`
+3. Winning agent is called via `/internal/agents/{name}/execute`
+4. Execute route checks `agent.build_prompt()` — if non-None, routes through `ModelRouter.complete()` using the agent's preferred model profile
+5. If `build_prompt()` returns None, calls `agent.execute()` directly (e.g. MathAgent)
 
 ### Workflow execution
 
-Workflow definitions are persisted.
-
-Workflow execution path:
-
-1. load workflow definition from PostgreSQL
-2. build `WorkflowStep` objects
-3. create workflow execution row
-4. execute each step through the orchestrator
-5. persist workflow execution results
-
-This is important because workflow steps now create:
-
-- normal execution rows
-- agent metrics
-- execution logs
+1. Load workflow definition from PostgreSQL
+2. Build `WorkflowStep` objects with task templates
+3. Create workflow execution row
+4. Execute each step through the orchestrator (creates execution records, metrics, logs)
+5. Pass `{previous_output}` from each step to the next via template rendering
+6. Persist workflow execution results
 
 ### Multi-model behavior
 
-The backend exposes a public model catalog and supports agent-level preferred model profiles.
+Model profiles are built from settings:
 
-Current model profile families:
-
-- general Azure profile
-- planner Azure profile when configured
-- reviewer Azure profile when configured
-- deterministic fallback profiles
+- `azure-general` — default Azure deployment (when LLM configured)
+- `azure-planner` — separate planner deployment (when `AZURE_OPENAI_PLANNER_DEPLOYMENT` set)
+- `azure-reviewer` — separate reviewer deployment (when `AZURE_OPENAI_REVIEWER_DEPLOYMENT` set)
+- `fallback-fast` / `fallback-critic` — deterministic fallback profiles (always present)
 
 ## Validation Status
 
@@ -288,34 +275,39 @@ Validation last updated: `2026-04-20`
 
 Validated successfully:
 
-- backend compile checks
-- frontend lint
-- frontend production build
-- backend unit and API test suite
-- PostgreSQL integration tests against the local `actypity` database
-- live authenticated workflow against the local PostgreSQL-backed app
+- backend full compile check (all 18 modules)
+- backend import check (`from backend.main import app`)
+- frontend ESLint clean
+- frontend production build (Vite)
+- full pytest suite: 99 tests passing
+  - unit tests: agents, orchestrator, storage, auth, API, workflow
+  - PostgreSQL integration tests: executions, metrics, logs, registry, auth keys
+- live authenticated workflow validated against local PostgreSQL-backed app
 
 Live workflow validated:
 
 - health and auth status
 - first-admin bootstrap
-- protected registry access
-- task execution
-- workflow definition creation
-- workflow execution
+- protected registry and model listing
+- task execution (math, generalist, planner, reviewer routing)
+- workflow definition creation and execution
 - metrics read
 - logs read and execution-specific filtering
-- execution history read
+- execution history read with model_profile and provider fields
 
 ## Known Gaps
 
-Current production gaps worth addressing next:
-
-- no formal migration framework; schema changes currently rely on table bootstrap behavior
-- no user-facing API key management UI beyond first bootstrap and manual key loading
-- no background queue for long-running workflow execution
-- no OpenTelemetry tracing or structured request correlation yet
-- Azure OpenAI is currently optional and can remain in deterministic fallback mode if env vars are placeholders
+| ID | Issue | Status |
+|---|---|---|
+| G2 | `MAX_TOKENS` default 2000 may be too high for some deployments | Open — configure via env |
+| G3 | `.env` has stale Cosmos DB vars | Open — ignore, overridden by real vars |
+| G4 | `azure-identity` in requirements but never imported | Open — remove when cleaned up |
+| G8 | `GeneralistAgent.can_handle()` always returns 40 | Open by design — it's the catch-all |
+| G9 | K8s `secrets.yaml` has placeholder base64 values | Open — fill before production deploy |
+| G10 | No formal migration framework; `reset_all()` drops/recreates for tests only | Open — add Alembic for production migrations |
+| G11 | No user-facing API key management UI beyond bootstrap and manual key loading | Open |
+| G12 | No background queue for long-running workflow execution | Open |
+| G13 | No OpenTelemetry tracing or structured request correlation | Open |
 
 ## Change Zone Guide
 
@@ -332,17 +324,19 @@ Current production gaps worth addressing next:
 
 1. implement the agent in `agents/`
 2. give `can_handle()` a meaningful score
-3. return `AgentResult`
-4. register it in `backend/container.py`
-5. ensure registry sync still writes it to PostgreSQL
-6. add or update tests
+3. optionally implement `build_prompt()` to use the model router
+4. return `AgentResult`
+5. register it in `backend/container.py`
+6. ensure registry sync still writes it to PostgreSQL
+7. add or update tests
 
 ### Change PostgreSQL-backed persistence
 
-1. update `backend/database.py`
+1. update `backend/database.py` (table definition + methods)
 2. update `backend/storage.py` only if execution-store behavior changes
 3. update route responses if persisted data shape changes
 4. add or update PostgreSQL integration tests
+5. note: `create_all()` does not ALTER existing tables — use `reset_all()` in tests; plan a migration for production
 
 ### Change auth behavior
 

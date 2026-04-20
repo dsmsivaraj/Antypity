@@ -20,6 +20,13 @@ spec:
         envFrom:
         - secretRef:
             name: actypity-secrets
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+          limits:
+            cpu: "1000m"
+            memory: "512Mi"
 ---
 apiVersion: v1
 kind: Service

@@ -186,8 +186,10 @@ function App() {
                 </div>
 
                 <div className="mb-3">
-                  <label className="form-label">API key</label>
+                  <label className="form-label" htmlFor="api-key-input">API key</label>
                   <input
+                    id="api-key-input"
+                    name="apiKey"
                     className="form-control form-control-lg"
                     type="password"
                     value={apiKey}
@@ -199,29 +201,34 @@ function App() {
                   Load protected data
                 </button>
 
-                {health?.auth_enabled && authStatus?.bootstrap_required ? (
-                  <form onSubmit={handleBootstrap} className="border-top pt-3">
-                    <div className="mb-3">
-                      <label className="form-label">Bootstrap token</label>
-                      <input
-                        className="form-control"
-                        type="password"
-                        value={bootstrapToken}
-                        onChange={(event) => setBootstrapToken(event.target.value)}
-                        placeholder="BOOTSTRAP_ADMIN_TOKEN or SECRET_KEY"
-                        required
-                      />
-                    </div>
-                    <div className="mb-3">
-                      <label className="form-label">First admin key name</label>
-                      <input
-                        className="form-control"
-                        type="text"
-                        value={bootstrapName}
-                        onChange={(event) => setBootstrapName(event.target.value)}
-                        required
-                      />
-                    </div>
+	                {health?.auth_enabled && authStatus?.bootstrap_required ? (
+	                  <form onSubmit={handleBootstrap} className="border-top pt-3">
+	                    <div className="mb-3">
+	                      <label className="form-label" htmlFor="bootstrap-token-input">Bootstrap token</label>
+	                      <input
+	                        id="bootstrap-token-input"
+	                        name="bootstrapToken"
+	                        className="form-control"
+	                        type="password"
+	                        value={bootstrapToken}
+	                        onChange={(event) => setBootstrapToken(event.target.value)}
+	                        placeholder="BOOTSTRAP_ADMIN_TOKEN or SECRET_KEY"
+	                        required
+	                      />
+	                    </div>
+	                    <div className="mb-3">
+	                      <label className="form-label" htmlFor="bootstrap-name-input">First admin key name</label>
+	                      <input
+	                        id="bootstrap-name-input"
+	                        name="bootstrapName"
+	                        className="form-control"
+	                        type="text"
+	                        value={bootstrapName}
+	                        onChange={(event) => setBootstrapName(event.target.value)}
+	                        placeholder="e.g. ops-admin"
+	                        required
+	                      />
+	                    </div>
                     <button type="submit" className="btn btn-outline-primary w-100">
                       Create first admin key
                     </button>
@@ -252,8 +259,9 @@ function App() {
 
                 <form onSubmit={handleSubmit}>
                   <div className="mb-3">
-                    <label className="form-label">Task</label>
+                    <label htmlFor="task-input" className="form-label">Task</label>
                     <textarea
+                      id="task-input"
                       className="form-control"
                       rows={4}
                       value={task}
@@ -265,8 +273,9 @@ function App() {
 
                   <div className="row g-3">
                     <div className="col-md-6">
-                      <label className="form-label">Agent</label>
+                      <label htmlFor="agent-select" className="form-label">Agent</label>
                       <select
+                        id="agent-select"
                         className="form-select"
                         value={agentName}
                         onChange={(event) => setAgentName(event.target.value)}
@@ -280,8 +289,9 @@ function App() {
                       </select>
                     </div>
                     <div className="col-md-6">
-                      <label className="form-label">Model profile</label>
+                      <label htmlFor="model-select" className="form-label">Model profile</label>
                       <select
+                        id="model-select"
                         className="form-select"
                         value={modelProfile}
                         onChange={(event) => setModelProfile(event.target.value)}
@@ -297,8 +307,9 @@ function App() {
                   </div>
 
                   <div className="mt-3">
-                    <label className="form-label">Context JSON</label>
+                    <label htmlFor="context-input" className="form-label">Context JSON</label>
                     <textarea
+                      id="context-input"
                       className="form-control code-block"
                       rows={6}
                       value={contextText}

@@ -34,6 +34,8 @@ Engineering standard:
 - Register agents only in `backend/container.py` — never in route handlers or other agents
 - Skills are pure functions wrapped in `Skill(name, description, handler)` — keep them stateless
 - Registry changes must remain PostgreSQL-syncable through `backend/container.py`
+- Implement `build_prompt()` returning `Dict[str, str]` if the agent uses the LLM via the model router; return `None` to use `execute()` directly (for deterministic agents like MathAgent)
+- Set `preferred_model` in `AgentMetadata` to tie the agent to a specific model profile
 
 ### 3. Frontend engineering
 
@@ -122,10 +124,10 @@ Fix order: check registry wiring → check `can_handle()` scores → check `_res
 ### Pattern: LLM call fails at runtime
 
 Likely files:
-- `backend/llm_client.py:51` — live `.create()` call has no try/except
+- `backend/llm_client.py` — `_get_client()` lazy init or `complete()` network/rate-limit error
 - `backend/config.py` — env vars not set or loaded from wrong `.env` path
 
-Fix: wrap `client.chat.completions.create(...)` in try/except inside `LLMClient.complete()`, return fallback on exception
+`LLMClient.complete()` wraps the Azure API call in try/except and returns a fallback `LLMResult` on any exception. If LLM calls are silently falling back when you expect live results, check: `health.llm_enabled`, the Azure env vars, and `LLMClient.client_error`.
 
 ---
 
