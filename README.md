@@ -1,6 +1,6 @@
-# Actypity
+# Antypity
 
-Actypity is a production-ready application base for building agent-enabled products with a FastAPI backend and a React frontend.
+Antypity contains the Actypity production-ready application base for building agent-enabled products with a FastAPI backend and a React frontend.
 
 ## What is included
 
