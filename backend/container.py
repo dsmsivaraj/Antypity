@@ -6,17 +6,25 @@ from dataclasses import dataclass
 from agents.agent_orchestrator import AgentOrchestrator
 from agents.agent_registry import AgentRegistry
 from agents.agent_skills import common_skills
+from agents.diagnostics_agent import (
+    CodeAnalyzerAgent,
+    DiagnosticsReporterAgent,
+    HealthCheckAgent,
+    TestRunnerAgent,
+)
 from agents.example_agent import GeneralistAgent, MathAgent, PlannerAgent, ReviewerAgent
 from agents.workflow_engine import WorkflowExecutor
 
 from .auth import AuthService
 from .config import Settings, get_settings
 from .database import PostgreSQLDatabaseClient
+from .diagnostics import DiagnosticsService
 from .internal_api import InternalPlatformAPI
 from .llm_client import LLMClient
 from .log_handler import setup_logging
 from .metrics import MetricsService
 from .model_router import ModelRouter
+from .scheduler import DiagnosticsScheduler
 from .storage import ExecutionStore, build_execution_store
 
 _logger = logging.getLogger(__name__)
@@ -35,6 +43,8 @@ class AppContainer:
     auth_service: AuthService
     metrics_service: MetricsService
     workflow_executor: WorkflowExecutor
+    diagnostics_service: DiagnosticsService
+    scheduler: DiagnosticsScheduler
 
 
 def build_container() -> AppContainer:
@@ -66,6 +76,27 @@ def build_container() -> AppContainer:
     )
     workflow_executor = WorkflowExecutor(orchestrator=orchestrator)
 
+    # Register diagnostic agents
+    health_agent = HealthCheckAgent(
+        db_client=database_client, llm_client=llm_client, registry=registry, store=None
+    )
+    registry.register(health_agent)
+    registry.register(TestRunnerAgent())
+    registry.register(CodeAnalyzerAgent())
+    registry.register(DiagnosticsReporterAgent())
+
+    diagnostics_service = DiagnosticsService(
+        health_agent=health_agent,
+        test_agent=TestRunnerAgent(),
+        code_agent=CodeAnalyzerAgent(),
+        reporter_agent=DiagnosticsReporterAgent(),
+        db_client=database_client,
+    )
+    scheduler = DiagnosticsScheduler(
+        run_fn=diagnostics_service.run_full_diagnostics,
+        interval_seconds=settings.diagnostics_interval_seconds,
+    )
+
     # Sync in-memory registry to PostgreSQL for audit/visibility.
     _sync_registry_to_db(registry, database_client)
 
@@ -85,6 +116,8 @@ def build_container() -> AppContainer:
         auth_service=auth_service,
         metrics_service=metrics_service,
         workflow_executor=workflow_executor,
+        diagnostics_service=diagnostics_service,
+        scheduler=scheduler,
     )
 
 

@@ -234,6 +234,41 @@ class WorkflowExecutionListResponse(ApiSchema):
     executions: List[WorkflowExecutionResponse]
 
 
+# ── Diagnostics ──────────────────────────────────────────────────────────────
+
+class DiagnosticIssue(ApiSchema):
+    severity: str
+    category: str
+    message: str
+    file: Optional[str] = None
+    line: Optional[int] = None
+    suggestion: Optional[str] = None
+
+
+class DiagnosticTestResult(ApiSchema):
+    passed: int
+    failed: int
+    errors: int
+    duration_seconds: float
+    status: str
+    output: str = ""
+
+
+class DiagnosticRunResponse(ApiSchema):
+    id: str
+    status: str
+    health: Optional[Dict[str, Any]] = None
+    tests: Optional[DiagnosticTestResult] = None
+    issues: List[DiagnosticIssue] = []
+    summary: str
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+
+
+class DiagnosticRunListResponse(ApiSchema):
+    runs: List[DiagnosticRunResponse]
+
+
 # ── Errors ───────────────────────────────────────────────────────────────────
 
 class ApiError(ApiSchema):

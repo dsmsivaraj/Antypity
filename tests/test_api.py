@@ -36,12 +36,16 @@ class TestAgentRoutes:
         assert resp.status_code == 200
         agents = resp.json()
         assert isinstance(agents, list)
-        assert len(agents) == 4
+        assert len(agents) >= 4
         names = {a["name"] for a in agents}
         assert "generalist" in names
         assert "planner" in names
         assert "reviewer" in names
         assert "math" in names
+        assert "health-monitor" in names
+        assert "test-runner" in names
+        assert "code-analyzer" in names
+        assert "diagnostics-reporter" in names
 
     def test_agent_has_required_fields(self, client: TestClient):
         resp = client.get("/agents")

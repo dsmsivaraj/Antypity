@@ -52,6 +52,7 @@ class Settings:
     azure_openai_api_version: str
     request_timeout_seconds: float
     max_tokens: int
+    diagnostics_interval_seconds: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -94,6 +95,7 @@ class Settings:
             azure_openai_api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01"),
             request_timeout_seconds=float(os.getenv("REQUEST_TIMEOUT_SECONDS", "30")),
             max_tokens=int(os.getenv("MAX_TOKENS", "2000")),
+            diagnostics_interval_seconds=int(os.getenv("DIAGNOSTICS_INTERVAL_SECONDS", "1800")),
         )
 
     @classmethod
@@ -130,6 +132,7 @@ class Settings:
             azure_openai_api_version="2024-02-01",
             request_timeout_seconds=5.0,
             max_tokens=500,
+            diagnostics_interval_seconds=1800,
         )
 
     @property

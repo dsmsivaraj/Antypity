@@ -10,17 +10,25 @@ from typing import Optional
 from agents.agent_orchestrator import AgentOrchestrator
 from agents.agent_registry import AgentRegistry
 from agents.agent_skills import common_skills
+from agents.diagnostics_agent import (
+    CodeAnalyzerAgent,
+    DiagnosticsReporterAgent,
+    HealthCheckAgent,
+    TestRunnerAgent,
+)
 from agents.example_agent import GeneralistAgent, MathAgent, PlannerAgent, ReviewerAgent
 from agents.workflow_engine import WorkflowExecutor
 from backend.auth import AuthService
 from backend.config import Settings
 from backend.container import AppContainer
 from backend.database import PostgreSQLDatabaseClient
+from backend.diagnostics import DiagnosticsService
 from backend.internal_api import InternalPlatformAPI
 from backend.llm_client import LLMClient, LLMResult
 from backend.main import create_app
 from backend.metrics import MetricsService
 from backend.model_router import ModelRouter
+from backend.scheduler import DiagnosticsScheduler
 from backend.storage import InMemoryExecutionStore
 
 
@@ -41,12 +49,16 @@ def mock_llm() -> LLMClient:
 
 
 @pytest.fixture()
-def registry(mock_llm: LLMClient) -> AgentRegistry:
+def registry(mock_llm: LLMClient, mock_db: MagicMock) -> AgentRegistry:
     reg = AgentRegistry()
     reg.register(GeneralistAgent(llm_client=mock_llm, skills=common_skills))
     reg.register(PlannerAgent(llm_client=mock_llm, skills=common_skills))
     reg.register(ReviewerAgent(llm_client=mock_llm, skills=common_skills))
     reg.register(MathAgent(skills=common_skills))
+    reg.register(HealthCheckAgent(db_client=mock_db, llm_client=mock_llm, registry=reg, store=None))
+    reg.register(TestRunnerAgent())
+    reg.register(CodeAnalyzerAgent())
+    reg.register(DiagnosticsReporterAgent())
     return reg
 
 
@@ -99,6 +111,15 @@ def container(
         metrics=metrics,
     )
     workflow_executor = WorkflowExecutor(orchestrator=orchestrator)
+    health_agent = HealthCheckAgent(db_client=mock_db, llm_client=mock_llm, registry=registry, store=None)
+    diag_service = DiagnosticsService(
+        health_agent=health_agent,
+        test_agent=TestRunnerAgent(),
+        code_agent=CodeAnalyzerAgent(),
+        reporter_agent=DiagnosticsReporterAgent(),
+        db_client=None,
+    )
+    scheduler = DiagnosticsScheduler(run_fn=diag_service.run_full_diagnostics, interval_seconds=99999)
     return AppContainer(
         settings=test_settings,
         llm_client=mock_llm,
@@ -111,6 +132,8 @@ def container(
         auth_service=mock_auth,
         metrics_service=metrics,
         workflow_executor=workflow_executor,
+        diagnostics_service=diag_service,
+        scheduler=scheduler,
     )
 
 
@@ -162,6 +185,7 @@ def postgres_client(postgres_dsn: Optional[str]):
         azure_openai_api_version="2024-02-01",
         request_timeout_seconds=5.0,
         max_tokens=500,
+        diagnostics_interval_seconds=1800,
     )
     db = PostgreSQLDatabaseClient(settings)
     db.connect()

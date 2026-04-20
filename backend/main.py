@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
 
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -24,6 +26,10 @@ from .schemas import (
     ApiKeyListResponse,
     ApiKeyResponse,
     AuthStatusResponse,
+    DiagnosticIssue,
+    DiagnosticRunListResponse,
+    DiagnosticRunResponse,
+    DiagnosticTestResult,
     ExecutionHistoryResponse,
     ExecutionResponse,
     HealthResponse,
@@ -120,7 +126,9 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
             _container.settings.auth_enabled,
             _container.llm_client.enabled,
         )
+        _container.scheduler.start()
         yield
+        _container.scheduler.stop()
         _logger.info("Actypity backend shutting down.")
 
     app = FastAPI(
@@ -138,6 +146,58 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # ── Self-Healing (Gateway to Orchestrator) ──────────────────────────
+
+    @app.get("/self-healing/status", tags=["self-healing"])
+    async def get_self_healing_status(
+        request: Request,
+        _: dict = Depends(_require("admin")),
+    ):
+        container: AppContainer = request.app.state.container
+        # Assume orchestrator is at fixed local port for this dev environment
+        # or can be moved to an env var.
+        url = os.environ.get("ORCHESTRATOR_SERVICE_URL", "http://localhost:9503")
+        token = container.settings.internal_api_token
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                # Use internal token for backend -> service call
+                response = await client.get(
+                    f"{url}/self-healing/status",
+                    headers={"X-Internal-Token": token}
+                )
+                response.raise_for_status()
+                return response.json()
+            except Exception as exc:
+                _logger.error("Failed to fetch self-healing status: %s", exc)
+                raise HTTPException(status_code=502, detail="Orchestrator service unreachable.")
+
+    # ── Identity Proxy ──────────────────────────────────────────────────
+
+    @app.post("/auth/social", tags=["auth"])
+    async def proxy_social_auth(request: Request, body: dict):
+        url = os.environ.get("IDENTITY_SERVICE_URL", "http://localhost:9504")
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(f"{url}/auth/social", json=body)
+                response.raise_for_status()
+                return response.json()
+            except Exception as exc:
+                _logger.error("Social auth proxy failed: %s", exc)
+                raise HTTPException(status_code=502, detail="Identity service unreachable.")
+
+    @app.get("/users/me", tags=["users"])
+    async def proxy_get_me(request: Request, token: str = Query(...)):
+        url = os.environ.get("IDENTITY_SERVICE_URL", "http://localhost:9504")
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(f"{url}/users/me", params={"token": token})
+                response.raise_for_status()
+                return response.json()
+            except Exception as exc:
+                _logger.error("Get me proxy failed: %s", exc)
+                raise HTTPException(status_code=401, detail="Invalid session.")
 
     _register_routes(app)
     return app
@@ -600,6 +660,38 @@ def _register_routes(app: FastAPI) -> None:
             ]
         )
 
+    # ── Diagnostics ───────────────────────────────────────────────────────
+
+    @app.post("/diagnostics/run", response_model=DiagnosticRunResponse, tags=["diagnostics"])
+    async def run_diagnostics(
+        request: Request,
+        _: dict = Depends(_require("execute")),
+    ):
+        container: AppContainer = request.app.state.container
+        record = await container.diagnostics_service.run_full_diagnostics()
+        return _build_diag_response(record)
+
+    @app.get("/diagnostics/reports", response_model=DiagnosticRunListResponse, tags=["diagnostics"])
+    async def list_diagnostic_reports(
+        request: Request,
+        limit: int = Query(10, ge=1, le=50),
+        _: dict = Depends(_require("logs:read")),
+    ):
+        container: AppContainer = request.app.state.container
+        records = container.diagnostics_service.get_reports(limit=limit)
+        return DiagnosticRunListResponse(runs=[_build_diag_response(r) for r in records])
+
+    @app.get("/diagnostics/reports/latest", response_model=DiagnosticRunResponse, tags=["diagnostics"])
+    async def latest_diagnostic_report(
+        request: Request,
+        _: dict = Depends(_require("logs:read")),
+    ):
+        container: AppContainer = request.app.state.container
+        record = container.diagnostics_service.get_latest_report()
+        if not record:
+            raise HTTPException(status_code=404, detail="No diagnostic reports found. Run POST /diagnostics/run first.")
+        return _build_diag_response(record)
+
     # ── Internal orchestration APIs ──────────────────────────────────────
 
     @app.get("/internal/models", response_model=ModelListResponse, include_in_schema=False)
@@ -691,6 +783,33 @@ def _register_routes(app: FastAPI) -> None:
             provider=llm_result.provider,
             model_profile=profile.id,
         )
+
+
+def _build_diag_response(record: dict) -> DiagnosticRunResponse:
+    tests_raw = record.get("tests")
+    tests_model = None
+    if tests_raw:
+        tests_model = DiagnosticTestResult(
+            passed=tests_raw.get("passed", 0),
+            failed=tests_raw.get("failed", 0),
+            errors=tests_raw.get("errors", 0),
+            duration_seconds=float(tests_raw.get("duration_seconds", 0)),
+            status=tests_raw.get("status", "unknown"),
+            output=tests_raw.get("output", ""),
+        )
+    return DiagnosticRunResponse(
+        id=record["id"],
+        status=record["status"],
+        health=record.get("health"),
+        tests=tests_model,
+        issues=[DiagnosticIssue(**i) for i in (record.get("issues") or [])],
+        summary=record["summary"],
+        created_at=datetime.fromisoformat(record["created_at"]),
+        completed_at=(
+            datetime.fromisoformat(record["completed_at"])
+            if record.get("completed_at") else None
+        ),
+    )
 
 
 app = create_app()

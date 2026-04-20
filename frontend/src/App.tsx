@@ -6,9 +6,15 @@ import type {
   AgentSummary,
   ApiKeyCreateResponse,
   AuthStatusResponse,
+  DiagnosticRunResponse,
   ExecutionResponse,
   HealthResponse,
   ModelSummary,
+  SelfHealingStatus,
+  User,
+  ResumeAnalysis,
+  JobSearchResult,
+  Analytics,
 } from './types'
 
 const INITIAL_CONTEXT = '{\n  "priority": "normal",\n  "channel": "web"\n}'
@@ -19,6 +25,11 @@ function App() {
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [history, setHistory] = useState<ExecutionResponse[]>([])
   const [authStatus, setAuthStatus] = useState<AuthStatusResponse | null>(null)
+  const [selfHealing, setSelfHealing] = useState<SelfHealingStatus | null>(null)
+  const [user, setUser] = useState<User | null>(null)
+  const [resumeAnalysis, setResumeAnalysis] = useState<ResumeAnalysis | null>(null)
+  const [jobMatches, setJobMatches] = useState<JobSearchResult[]>([])
+  const [analytics, setAnalytics] = useState<Analytics | null>(null)
   const [apiKey, setApiKey] = useState(() => getStoredApiKey())
   const [bootstrapToken, setBootstrapToken] = useState('')
   const [bootstrapName, setBootstrapName] = useState('local-admin')
@@ -31,16 +42,38 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [bootError, setBootError] = useState('')
   const [submitError, setSubmitError] = useState('')
+  const [diagnostics, setDiagnostics] = useState<DiagnosticRunResponse | null>(null)
+  const [diagLoading, setDiagLoading] = useState(false)
+  const [diagError, setDiagError] = useState('')
 
   async function loadProtectedData() {
-    const [agentResult, modelResult, historyResult] = await Promise.all([
+    const [agentResult, modelResult, historyResult, selfHealingResult, analyticsResult, diagResult] = await Promise.all([
       api.getAgents(),
       api.getModels(),
       api.getExecutions(),
+      api.getSelfHealingStatus().catch(() => null),
+      api.getAnalytics().catch(() => null),
+      api.getLatestDiagnosticReport().catch(() => null),
     ])
     setAgents(agentResult)
     setModels(modelResult.models)
     setHistory(historyResult.executions)
+    setSelfHealing(selfHealingResult)
+    setAnalytics(analyticsResult)
+    setDiagnostics(diagResult)
+  }
+
+  async function handleRunDiagnostics() {
+    setDiagLoading(true)
+    setDiagError('')
+    try {
+      const result = await api.runDiagnostics()
+      setDiagnostics(result)
+    } catch (err) {
+      setDiagError(err instanceof Error ? err.message : 'Diagnostics failed.')
+    } finally {
+      setDiagLoading(false)
+    }
   }
 
   useEffect(() => {
@@ -131,6 +164,35 @@ function App() {
       await loadProtectedData()
     } catch (error) {
       setBootError(error instanceof Error ? error.message : 'Failed to load data with the API key.')
+    }
+  }
+
+  async function handleSocialLogin(provider: string) {
+    try {
+      const mockToken = "mock_social_token"
+      const mockEmail = "user@example.com"
+      const session = await api.loginSocial(provider, mockToken, mockEmail, "Social User", "12345")
+      setUser(session.user)
+      window.localStorage.setItem('ats_session_token', session.access_token)
+    } catch (error) {
+      setBootError(error instanceof Error ? error.message : 'Social login failed.')
+    }
+  }
+
+  async function handleResumeUpload(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    setLoading(true)
+    try {
+      const { text } = await api.parseResume(file)
+      const analysis = await api.analyzeResume(text, "")
+      setResumeAnalysis(analysis)
+      const matches = await api.searchJobs(analysis.ats_keywords)
+      setJobMatches(matches)
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : 'Resume processing failed.')
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -240,6 +302,70 @@ function App() {
                     Admin key created for <strong>{bootstrapResult.name}</strong>.
                   </div>
                 ) : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="col-12">
+            <div className="card glass-card border-0 rounded-4 mb-4">
+              <div className="card-body p-4">
+                <div className="text-uppercase small text-secondary fw-semibold">Applicant Tracking</div>
+                <h2 className="section-title h4 mb-4">ATS & Job Matching</h2>
+                
+                {!user ? (
+                  <div className="text-center py-5">
+                    <h5>Sign in to access your personal ATS dashboard</h5>
+                    <div className="d-flex justify-content-center gap-2 mt-3">
+                      <button className="btn btn-outline-primary" onClick={() => handleSocialLogin('google')}>Google</button>
+                      <button className="btn btn-outline-primary" onClick={() => handleSocialLogin('facebook')}>Facebook</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="row g-4">
+                    <div className="col-md-5">
+                      <div className="p-3 border rounded-4 bg-light">
+                        <label className="form-label fw-bold">1. Upload Resume (PDF/Word)</label>
+                        <input type="file" className="form-control" onChange={handleResumeUpload} accept=".pdf,.docx" />
+                        
+                        {resumeAnalysis && (
+                          <div className="mt-4">
+                            <h6>Keywords Found</h6>
+                            <div className="d-flex flex-wrap gap-2 mb-3">
+                              {resumeAnalysis.ats_keywords.map(kw => <span key={kw} className="badge bg-primary">{kw}</span>)}
+                            </div>
+                            <h6>Improvement Tips</h6>
+                            <ul className="small text-secondary">
+                              {resumeAnalysis.suggestions.map((s, i) => <li key={i}>{s}</li>)}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <div className="col-md-7">
+                      <div className="p-3 border rounded-4">
+                        <label className="form-label fw-bold">2. Matching Job Openings</label>
+                        {jobMatches.length === 0 ? (
+                          <div className="text-secondary small">Upload your resume to see matching jobs across portals.</div>
+                        ) : (
+                          <div className="list-group list-group-flush">
+                            {jobMatches.map(job => (
+                              <div key={job.id} className="list-group-item px-0">
+                                <div className="d-flex justify-content-between align-items-center">
+                                  <div>
+                                    <div className="fw-bold">{job.title}</div>
+                                    <div className="small text-secondary">{job.company} • {job.location}</div>
+                                  </div>
+                                  <a href={job.url} target="_blank" rel="noreferrer" className="btn btn-sm btn-outline-primary">View</a>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -404,6 +530,211 @@ function App() {
                     </div>
                   ))}
                 </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="col-12">
+            <div className="card glass-card border-0 rounded-4">
+              <div className="card-body p-4">
+                <div className="d-flex justify-content-between align-items-start mb-3">
+                  <div>
+                    <div className="text-uppercase small text-secondary fw-semibold">Autonomous Maintenance</div>
+                    <h2 className="section-title h4 mb-0">Self-Healing Status</h2>
+                  </div>
+                  {selfHealing && (
+                    <span className={`badge rounded-pill ${selfHealing.is_running ? 'text-bg-success' : 'text-bg-secondary'}`}>
+                      {selfHealing.is_running ? 'Loop Active' : 'Loop Inactive'}
+                    </span>
+                  )}
+                </div>
+                {!selfHealing ? (
+                  <div className="text-secondary">Self-healing orchestrator status not available.</div>
+                ) : (
+                  <div className="row g-4">
+                    <div className="col-md-4">
+                      <div className="border rounded-4 p-3 bg-light">
+                        <div className="small text-secondary text-uppercase fw-semibold mb-2">Current Health</div>
+                        <div className="h5 mb-0">
+                          {selfHealing.last_cycle?.status === 'healthy' ? (
+                            <span className="text-success">● Healthy</span>
+                          ) : selfHealing.last_cycle?.status === 'verified' ? (
+                            <span className="text-primary">● Recovered</span>
+                          ) : (
+                            <span className="text-warning">● {selfHealing.last_cycle?.status || 'Unknown'}</span>
+                          )}
+                        </div>
+                        <div className="small text-secondary mt-1">
+                          Last checked: {selfHealing.last_cycle ? new Date(selfHealing.last_cycle.timestamp).toLocaleTimeString() : 'Never'}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="col-md-8">
+                      <div className="table-wrap">
+                        <table className="table table-sm align-middle mb-0">
+                          <thead>
+                            <tr>
+                              <th>Time</th>
+                              <th>Status</th>
+                              <th>Issues (Init → Final)</th>
+                              <th>Actions Taken</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {selfHealing.history.slice().reverse().map((cycle, idx) => (
+                              <tr key={idx}>
+                                <td>{new Date(cycle.timestamp).toLocaleTimeString()}</td>
+                                <td>
+                                  <span className={`badge ${cycle.status === 'healthy' ? 'text-bg-success' : 'text-bg-info'}`}>
+                                    {cycle.status}
+                                  </span>
+                                </td>
+                                <td>{cycle.initial_issues_count ?? 0} → {cycle.final_issues_count ?? 0}</td>
+                                <td>
+                                  {cycle.actions.length > 0 ? (
+                                    <div className="small">
+                                      {cycle.actions.map((a, i) => (
+                                        <div key={i}>• {a.type}: {a.service || a.file}</div>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <span className="text-secondary small">None</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="col-12">
+            <div className="card glass-card border-0 rounded-4 mb-4">
+              <div className="card-body p-4">
+                <div className="text-uppercase small text-secondary fw-semibold">Platform Metrics</div>
+                <h2 className="section-title h4 mb-4">System Analytics</h2>
+                {!analytics ? (
+                  <div className="text-secondary">Analytics data not available.</div>
+                ) : (
+                  <div className="row g-4">
+                    <div className="col-md-3">
+                      <div className="border rounded-4 p-3 bg-white shadow-sm text-center">
+                        <div className="small text-secondary text-uppercase fw-semibold mb-1">Total Apps</div>
+                        <div className="h3 mb-0 text-primary">{analytics.total_applications}</div>
+                      </div>
+                    </div>
+                    <div className="col-md-3">
+                      <div className="border rounded-4 p-3 bg-white shadow-sm text-center">
+                        <div className="small text-secondary text-uppercase fw-semibold mb-1">Avg Match</div>
+                        <div className="h3 mb-0 text-success">{analytics.match_accuracy_avg}%</div>
+                      </div>
+                    </div>
+                    <div className="col-md-6">
+                      <div className="border rounded-4 p-3 bg-white shadow-sm">
+                        <div className="small text-secondary text-uppercase fw-semibold mb-2">Status Distribution</div>
+                        <div className="d-flex gap-3">
+                          {Object.entries(analytics.by_status).map(([status, count]) => (
+                            <div key={status} className="text-center">
+                              <div className="badge bg-light text-dark border">{status}</div>
+                              <div className="fw-bold">{count}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="col-12">
+            <div className="card glass-card border-0 rounded-4">
+              <div className="card-body p-4">
+                <div className="d-flex justify-content-between align-items-center mb-3">
+                  <div>
+                    <div className="text-uppercase small text-secondary fw-semibold">Self-Monitoring</div>
+                    <h2 className="section-title h4 mb-0">Platform Diagnostics</h2>
+                  </div>
+                  <button
+                    className="btn btn-sm btn-outline-primary"
+                    onClick={handleRunDiagnostics}
+                    disabled={diagLoading}
+                  >
+                    {diagLoading ? 'Running…' : 'Run Diagnostics'}
+                  </button>
+                </div>
+                {diagError && <div className="alert alert-danger py-2">{diagError}</div>}
+                {!diagnostics && !diagLoading && (
+                  <div className="text-secondary">No diagnostic report yet. Click "Run Diagnostics" to start.</div>
+                )}
+                {diagLoading && (
+                  <div className="text-secondary">Running diagnostics — this may take a minute…</div>
+                )}
+                {diagnostics && (
+                  <div>
+                    <div className="d-flex align-items-center gap-3 mb-3">
+                      <span className={`badge fs-6 px-3 py-2 ${
+                        diagnostics.status === 'healthy' ? 'bg-success' :
+                        diagnostics.status === 'degraded' ? 'bg-warning text-dark' : 'bg-danger'
+                      }`}>
+                        {diagnostics.status.toUpperCase()}
+                      </span>
+                      {diagnostics.tests && (
+                        <span className="text-secondary small">
+                          Tests: {diagnostics.tests.passed} passed / {diagnostics.tests.failed} failed
+                          &nbsp;({diagnostics.tests.status})
+                        </span>
+                      )}
+                      <span className="text-secondary small ms-auto">
+                        {new Date(diagnostics.created_at).toLocaleString()}
+                      </span>
+                    </div>
+                    {diagnostics.issues.length > 0 && (
+                      <div className="table-wrap">
+                        <table className="table table-sm align-middle">
+                          <thead>
+                            <tr>
+                              <th>Severity</th>
+                              <th>Category</th>
+                              <th>Message</th>
+                              <th>File</th>
+                              <th>Suggestion</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {diagnostics.issues.map((issue, i) => (
+                              <tr key={i}>
+                                <td>
+                                  <span className={`badge ${
+                                    issue.severity === 'critical' ? 'bg-danger' :
+                                    issue.severity === 'warning' ? 'bg-warning text-dark' : 'bg-secondary'
+                                  }`}>
+                                    {issue.severity}
+                                  </span>
+                                </td>
+                                <td className="text-secondary small">{issue.category}</td>
+                                <td>{issue.message}</td>
+                                <td className="text-secondary small font-monospace">
+                                  {issue.file ? `${issue.file}${issue.line ? `:${issue.line}` : ''}` : '—'}
+                                </td>
+                                <td className="text-secondary small">{issue.suggestion ?? '—'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                    {diagnostics.issues.length === 0 && (
+                      <div className="text-success">No issues detected.</div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </div>

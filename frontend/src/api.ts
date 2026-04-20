@@ -2,15 +2,23 @@ import type {
   AgentSummary,
   ApiKeyCreateResponse,
   AuthStatusResponse,
+  DiagnosticRunListResponse,
+  DiagnosticRunResponse,
   ExecutionHistoryResponse,
   ExecutionResponse,
   HealthResponse,
   ModelListResponse,
+  SelfHealingStatus,
   TaskPayload,
+  User,
+  Session,
+  ResumeAnalysis,
+  JobSearchResult,
+  Analytics,
 } from './types'
 
 const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+  import.meta.env.VITE_API_BASE_URL || 'http://localhost:9500'
 ).replace(/\/$/, '')
 
 const API_KEY_STORAGE_KEY = 'actypity_api_key'
@@ -72,6 +80,43 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  getSelfHealingStatus: () => request<SelfHealingStatus>('/self-healing/status'),
+  runDiagnostics: () =>
+    request<DiagnosticRunResponse>('/diagnostics/run', { method: 'POST' }),
+  getDiagnosticReports: (limit = 10) =>
+    request<DiagnosticRunListResponse>(`/diagnostics/reports?limit=${limit}`),
+  getLatestDiagnosticReport: () =>
+    request<DiagnosticRunResponse>('/diagnostics/reports/latest'),
+
+  // Identity
+  loginSocial: (provider: string, token: string, email: string, name: string, socialId: string) =>
+    request<Session>('/auth/social', {
+      method: 'POST',
+      body: JSON.stringify({ provider, token, email, full_name: name, social_id: socialId }),
+    }),
+  getMe: (token: string) => request<User>(`/users/me?token=${token}`),
+
+  // ATS
+  parseResume: (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return fetch(`${API_BASE_URL}/resume/parse`, {
+      method: 'POST',
+      body: formData,
+    }).then(res => res.json())
+  },
+  analyzeResume: (text: string, jdText: string) =>
+    request<ResumeAnalysis>('/resume/analyze', {
+      method: 'POST',
+      body: JSON.stringify({ text, jd_text: jdText }),
+    }),
+  searchJobs: (keywords: string[]) =>
+    request<JobSearchResult[]>('/job/search', {
+      method: 'POST',
+      body: JSON.stringify({ keywords }),
+    }),
+  getAnalytics: () => request<Analytics>('/tracker/analytics'),
+
   bootstrapAdminKey: (bootstrapToken: string, name: string) =>
     request<ApiKeyCreateResponse>('/auth/bootstrap', {
       method: 'POST',
