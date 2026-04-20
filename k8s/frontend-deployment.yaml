@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: actypity-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: actypity-frontend
+  template:
+    metadata:
+      labels:
+        app: actypity-frontend
+    spec:
+      containers:
+      - name: frontend
+        image: actypity/frontend:latest
+        ports:
+        - containerPort: 4173
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: actypity-frontend-service
+spec:
+  selector:
+    app: actypity-frontend
+  ports:
+    - protocol: TCP
+      port: 4173
+      targetPort: 4173
+  type: LoadBalancer

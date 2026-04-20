@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: actypity-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: actypity-backend
+  template:
+    metadata:
+      labels:
+        app: actypity-backend
+    spec:
+      containers:
+      - name: backend
+        image: actypity/backend:latest
+        ports:
+        - containerPort: 8000
+        envFrom:
+        - secretRef:
+            name: actypity-secrets
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: actypity-backend-service
+spec:
+  selector:
+    app: actypity-backend
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+  type: LoadBalancer
