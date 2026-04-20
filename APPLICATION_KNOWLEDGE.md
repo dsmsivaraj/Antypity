@@ -344,3 +344,7 @@ Live workflow validated:
 2. keep `/health` and `/auth/status` aligned
 3. keep frontend bootstrap and API-key loading flows aligned
 4. update tests for bootstrap and RBAC expectations
+### Retest notes (2026-04-20)
+- Ran full test suite: 99 passed.
+- Fixed missing Postgres driver by adding psycopg2-binary to backend/requirements.txt.
+- Verified pytest passes locally.

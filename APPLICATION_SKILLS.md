@@ -315,3 +315,6 @@ As the platform grows, add specialized skills for:
 - **CI**: GitHub Actions workflows for lint, compile, build, smoke test
 - **Prompt engineering**: Prompt templates, evaluation harnesses, model comparison
 - **Multi-tenancy**: User context in `TaskRequest`, tenant-scoped execution history
+### Updated skills notes (2026-04-20)
+- Added dependency management note: psycopg2-binary required for local Postgres integration tests.
+- Recommend running 'pip install -r backend/requirements.txt' after environment setup.
