@@ -5,7 +5,7 @@ services:
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
+      POSTGRES_PASSWORD: changeme
       POSTGRES_DB: actypity
     ports:
       - "5432:5432"
@@ -24,7 +24,7 @@ services:
       - "9500:9500"
     environment:
       - APP_STORAGE_BACKEND=postgres
-      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - DATABASE_URL=postgresql+psycopg://postgres :changeme@postgres:5432/actypity
       - API_PORT=9500
       - INTERNAL_API_TOKEN=your-internal-token
       - ORCHESTRATOR_SERVICE_URL=http://orchestrator:9503
@@ -44,7 +44,7 @@ services:
       - "9501:9501"
     environment:
       - APP_STORAGE_BACKEND=postgres
-      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - DATABASE_URL=postgresql+psycopg://postgres :changeme@postgres:5432/actypity
       - INTERNAL_API_TOKEN=your-internal-token
     depends_on:
       postgres:
@@ -59,7 +59,7 @@ services:
       - "9502:9502"
     environment:
       - APP_STORAGE_BACKEND=postgres
-      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - DATABASE_URL=postgresql+psycopg://postgres :changeme@postgres:5432/actypity
       - INTERNAL_API_TOKEN=your-internal-token
     depends_on:
       postgres:
@@ -74,7 +74,7 @@ services:
       - "9503:9503"
     environment:
       - APP_STORAGE_BACKEND=postgres
-      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - DATABASE_URL=postgresql+psycopg://postgres :changeme@postgres:5432/actypity
       - INTERNAL_API_TOKEN=your-internal-token
       - DIAGNOSTICS_SERVICE_URL=http://diagnostics:9501
       - REPAIR_SERVICE_URL=http://repair:9502
@@ -91,7 +91,7 @@ services:
       - "9504:9504"
     environment:
       - APP_STORAGE_BACKEND=postgres
-      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - DATABASE_URL=postgresql+psycopg://postgres :changeme@postgres:5432/actypity
       - INTERNAL_API_TOKEN=your-internal-token
     depends_on:
       postgres:
@@ -106,7 +106,7 @@ services:
       - "9505:9505"
     environment:
       - APP_STORAGE_BACKEND=postgres
-      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - DATABASE_URL=postgresql+psycopg://postgres :changeme@postgres:5432/actypity
       - INTERNAL_API_TOKEN=your-internal-token
     depends_on:
       postgres:
@@ -121,7 +121,7 @@ services:
       - "9506:9506"
     environment:
       - APP_STORAGE_BACKEND=postgres
-      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - DATABASE_URL=postgresql+psycopg://postgres :changeme@postgres:5432/actypity
       - INTERNAL_API_TOKEN=your-internal-token
       - LLAMA_MODEL_PATH=/models/llama-3-8b.gguf
     depends_on:
@@ -137,7 +137,7 @@ services:
       - "9507:9507"
     environment:
       - APP_STORAGE_BACKEND=postgres
-      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - DATABASE_URL=postgresql+psycopg://postgres :changeme@postgres:5432/actypity
       - INTERNAL_API_TOKEN=your-internal-token
     depends_on:
       postgres:
@@ -152,7 +152,7 @@ services:
       - "9508:9508"
     environment:
       - APP_STORAGE_BACKEND=postgres
-      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - DATABASE_URL=postgresql+psycopg://postgres :changeme@postgres:5432/actypity
       - INTERNAL_API_TOKEN=your-internal-token
     depends_on:
       postgres:
@@ -167,7 +167,7 @@ services:
       - "9509:9509"
     environment:
       - APP_STORAGE_BACKEND=postgres
-      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - DATABASE_URL=postgresql+psycopg://postgres :changeme@postgres:5432/actypity
       - INTERNAL_API_TOKEN=your-internal-token
     depends_on:
       postgres:
@@ -182,7 +182,7 @@ services:
       - "9510:9510"
     environment:
       - APP_STORAGE_BACKEND=postgres
-      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - DATABASE_URL=postgresql+psycopg://postgres :changeme@postgres:5432/actypity
       - INTERNAL_API_TOKEN=your-internal-token
     depends_on:
       postgres:
@@ -210,7 +210,7 @@ services:
       - "9512:9512"
     environment:
       - APP_STORAGE_BACKEND=postgres
-      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - DATABASE_URL=postgresql+psycopg://postgres :changeme@postgres:5432/actypity
       - INTERNAL_API_TOKEN=your-internal-token
     depends_on:
       postgres:
@@ -225,7 +225,7 @@ services:
       - "9513:9513"
     environment:
       - APP_STORAGE_BACKEND=postgres
-      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - DATABASE_URL=postgresql+psycopg://postgres :changeme@postgres:5432/actypity
       - INTERNAL_API_TOKEN=your-internal-token
       - FIGMA_ACCESS_TOKEN=your-figma-token
     depends_on:

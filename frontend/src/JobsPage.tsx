@@ -1,7 +1,9 @@
 import type { Dispatch, SetStateAction } from 'react'
+import { JobHuntPage } from './JobHuntPage'
 import type { JobDescriptionResponse, JobSearchResult, JobSource } from './types'
 
 type JobsPageProps = {
+  resumeText?: string
   jobExtractUrl: string
   setJobExtractUrl: Dispatch<SetStateAction<string>>
   jdText: string
@@ -20,6 +22,7 @@ type JobsPageProps = {
 }
 
 export function JobsPage({
+  resumeText,
   jobExtractUrl,
   setJobExtractUrl,
   jdText,
@@ -85,6 +88,9 @@ export function JobsPage({
                 <div className="small text-secondary">{extractedJob.company || 'Unknown company'}</div>
                 <div className="small mt-2">
                   Source: {extractedJob.source} ({extractedJob.source_type})
+                </div>
+                <div className="small mt-1">
+                  Confidence: <strong>{extractedJob.confidence}</strong> · Evidence snippets: {extractedJob.citations.length}
                 </div>
               </div>
             ) : null}
@@ -183,6 +189,10 @@ export function JobsPage({
               </div>
             )}
           </div>
+        </div>
+
+        <div className="mt-4">
+          <JobHuntPage resumeText={resumeText} />
         </div>
       </div>
     </div>

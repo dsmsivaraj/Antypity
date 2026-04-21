@@ -11,6 +11,7 @@ This means:
 - prefer local/private model execution (Ollama, llama-cpp) for sensitive resume and JD workflows
 - use Gemini as the primary cloud LLM when billing is active; fall back to Ollama automatically
 - keep all operational and career records in PostgreSQL
+- keep cover letters, recruiter-contact discovery, and job-fit guidance grounded in resume/JD evidence rather than generic prose
 
 ---
 
@@ -74,10 +75,29 @@ Provider routing in `complete()`:
 - Resume scoring, ATS keyword extraction, seniority detection, role recommendations → `CareerService.analyze_resume()`.
 - Seniority is detected from VP/Director/Manager keywords and year-count heuristics; role recommendations are tiered (VP/Director/Manager/IC × domain).
 - Resume Q&A → `CareerService.chat_resume()`.
+- Cover letter generation → `CareerService.create_cover_letter()`.
+- Recruiter / HR contact discovery → `CareerService.discover_recruiter_contacts()`.
 - Live job hunt → `CareerService.live_hunt_jobs()` → `LiveJobSearchService`.
 - Job fit scoring → `CareerService._analyze_job_fit()` (keyword intersection, match %, matched/missing keywords, improvement areas).
 - Template design → `CareerService.design_template()`.
 - Do not scatter resume/job heuristics across route handlers.
+
+### Cover letters
+
+- Generate cover letters through `POST /resume/cover-letter`.
+- Keep them evidence-based: only claims that are supported by the resume or JD context.
+- Subject line, concise body, and talking points should all be returned.
+- Avoid generic enthusiasm paragraphs and avoid inventing domain expertise the candidate does not show.
+
+### Recruiter and HR contacts
+
+- Use `POST /job/recruiter-contacts` for structured discovery.
+- Priority order:
+  1. emails explicitly found in provided text
+  2. emails scraped from official company pages (`/careers`, `/contact`, `/about`, `/team`)
+  3. inferred mailbox patterns such as `careers@company.com` with low confidence
+- Always distinguish discovered contacts from inferred contacts.
+- Always return trusted lookup URLs, especially official company pages and LinkedIn people/company search paths.
 
 ### Live job hunt pipeline
 
@@ -101,6 +121,33 @@ Provider routing in `complete()`:
 - Do not reintroduce local JSON persistence for product state that belongs in PostgreSQL.
 - If a feature needs analytics, add an explicit DB method instead of computing it across routes.
 
+### Retrieval and grounding
+
+- The primary retrieval path is PostgreSQL `pgvector` when the extension and embedding model are available.
+- The legacy local index is still present as a fallback and migration source. Do not remove it unless every target environment has pgvector and embedding-model support.
+- Retrieval now uses hybrid candidate selection: vector retrieval plus lexical matching with application-side reranking.
+- If you change resume chat, JD extraction, or recruiter-contact discovery, prefer adding explicit provenance fields instead of longer prose.
+- `backend/embeddings_service.py` is the current retrieval entry point. If you improve retrieval, do it there first rather than adding one-off embedding logic in feature services.
+- The next production-grade step is hybrid RAG with PostgreSQL + `pgvector`, lexical filters, and re-ranking.
+- Persist grounding and drift signals in PostgreSQL instead of calculating them only in memory. `response_quality_metrics` is now the system of record for quality summaries.
+- New grounded outputs should return both evidence (`citations` or `provenance`) and an explicit confidence label. Avoid responses that read authoritative without showing what grounded them.
+
+### Prompt governance
+
+- Career prompts in `backend/career_service.py` and `agents/chatbot_agent.py` are product logic. Treat them like versioned business rules.
+- Avoid silently broadening prompts in ways that encourage unsupported claims.
+- Prefer prompts that require evidence from the resume, JD, or trusted source text.
+- If a response is retrieval-backed, preserve or improve the returned citations rather than stripping them for brevity.
+- When you change prompts, add or update tests for response shape and fallback behavior.
+
+### Hallucination and drift reduction
+
+- Prefer evidence extraction before generation.
+- Separate discovered facts from inferred suggestions, especially for recruiter-contact discovery.
+- Add metrics for retrieval hit-rate, empty-context rate, citation coverage, and fallback usage before considering fine-tuning.
+- Treat inferred contacts, low-evidence cover letters, and short/noisy job descriptions as drift-prone responses. Mark them low confidence and record a drift flag.
+- Fine-tuning should follow prompt versioning, eval datasets, and retrieval quality work, not replace them.
+
 ---
 
 ## Core frontend skills
@@ -118,13 +165,16 @@ The frontend uses page-state navigation inside `App.tsx`. Pages:
 - **overview** — orchestration console, diagnostics, self-healing status
 - **resume lab** — parse, analyze, Q&A, evaluate/write/review
 - **career chat** — `ChatPage.tsx` (self-managing state — do not lift into `App.tsx`)
-- **job discovery** — `JobsPage.tsx` + `JobHuntPage.tsx` (state in `App.tsx`)
+- **job discovery** — `JobsPage.tsx` plus embedded `JobHuntPage.tsx` for advanced live hunt / evaluate / write / review flows
 - **template studio** — `TemplatesPage.tsx` (state in `App.tsx`)
 
 Rules:
 - `ChatPage` manages its own session/message/loading state. Do not lift chatbot state into `App.tsx`.
 - `JobsPage` and `TemplatesPage` are prop-based; update their prop types when changing their data contract.
+- `JobHuntPage` is intentionally mounted inside `JobsPage`; if you change its props or API contracts, validate the parent integration, not just the standalone component.
 - Use Bootstrap components, but keep the layout opinionated rather than generic.
+- Keep overview and monitoring surfaces useful for operators. Platform metrics, retrieval state, and self-healing status belong in the UI when they drive troubleshooting.
+- Retrieval metrics shown in the UI should come from the backend analytics contract, not from frontend-derived estimates.
 
 ### Accessibility
 
@@ -175,6 +225,7 @@ Smoke test (backend running):
 ```bash
 curl http://localhost:9500/health
 curl -H "X-API-Key: act_local_admin" http://localhost:9500/models
+curl -H "X-API-Key: act_local_admin" http://localhost:9500/platform/insights
 curl -H "X-API-Key: act_local_admin" -X POST http://localhost:9500/execute \
   -H 'Content-Type: application/json' \
   -d '{"task": "add 3 and 5"}'
@@ -221,6 +272,31 @@ Check:
 - `container.chat_store` is a single `ChatStore()` — never reinstantiate per request
 - Session key: `sessionStorage.getItem('actypity_chat_session')` in the browser
 - Route is `POST /chat` — check CORS if cross-origin errors appear
+- The system prompt in `agents/chatbot_agent.py` now covers job filtering, cover letters, and recruiter-contact guidance; update that prompt before adding ad hoc route-side instructions.
+
+### Cover letter output is weak or generic
+
+Check:
+- `CareerService.create_cover_letter()` prompt and parser
+- Resume/JD excerpts passed into the request
+- `DEFAULT_MODEL_PROFILE` or request `model_profile`
+- Whether the response still contains a `Subject:` line and `Talking Points:` section
+
+### Recruiter contact discovery returns poor results
+
+Check:
+- Official company domain passed into `/job/recruiter-contacts`
+- Company page fetchability (`/careers`, `/contact`, `/about`, `/team`)
+- Whether contacts are discovered or inferred
+- Lookup URLs returned for LinkedIn/company research
+
+### Platform insights look wrong
+
+Check:
+- `GET /platform/insights` against the live backend
+- `backend/main.py` — ensure self-healing status comes from `container.self_healing`, not the diagnostics scheduler
+- `backend/embeddings_service.py` — verify retrieval backend and document counts
+- `frontend/src/App.tsx` — verify the overview page is rendering the latest platform insights state
 
 ### Self-healing not running
 
@@ -236,4 +312,4 @@ Check:
 - `X-API-Key` header is present
 - Key is seeded: `DEFAULT_ADMIN_KEY=act_local_admin` in `.env`
 - `AUTH_ENABLED=true` — set to `false` for local dev without key management
-- Bootstrap route: `POST /bootstrap` with `BOOTSTRAP_ADMIN_TOKEN` to create first admin key
+- Bootstrap route: `POST /auth/bootstrap` with `X-Bootstrap-Token` to create the first admin key

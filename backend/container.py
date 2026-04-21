@@ -26,6 +26,7 @@ from .career_service import CareerService
 from .config import Settings, get_settings
 from .database import PostgreSQLDatabaseClient
 from .diagnostics import DiagnosticsService
+from .embeddings_service import EmbeddingService, configure_embedding_service
 from .figma_client import FigmaClient
 from .gemini_client import GeminiClient
 from .internal_api import InternalPlatformAPI
@@ -64,6 +65,7 @@ class AppContainer:
     gemini_client: GeminiClient
     figma_client: FigmaClient
     chat_store: ChatStore
+    embedding_service: EmbeddingService
 
 
 def build_container() -> AppContainer:
@@ -105,11 +107,16 @@ def build_container() -> AppContainer:
         db=database_client,
         config_enabled=settings.auth_enabled,
         default_admin_key=settings.default_admin_key,
+        google_client_id=settings.google_client_id,
+    )
+    embedding_service = configure_embedding_service(
+        database_client=database_client if database_client.is_configured else None,
     )
     career_service = CareerService(
         settings=settings,
         model_router=model_router,
         database_client=database_client,
+        embedding_service=embedding_service,
     )
 
     registry = AgentRegistry()
@@ -172,6 +179,13 @@ def build_container() -> AppContainer:
 
     _sync_registry_to_db(registry, database_client)
 
+    try:
+        migrated_rows = embedding_service.migrate_local_embeddings()
+        if migrated_rows:
+            _logger.info("Migrated %d local embeddings into PostgreSQL pgvector.", migrated_rows)
+    except Exception as exc:
+        _logger.warning("Could not migrate local embeddings into pgvector: %s", exc)
+
     if settings.default_admin_key:
         auth_service.seed_default_admin(settings.default_admin_key)
 
@@ -203,6 +217,7 @@ def build_container() -> AppContainer:
         gemini_client=gemini_client,
         figma_client=figma_client,
         chat_store=chat_store,
+        embedding_service=embedding_service,
     )
 
 

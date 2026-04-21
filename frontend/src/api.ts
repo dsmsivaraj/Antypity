@@ -15,8 +15,11 @@ import type {
   JobSourceListResponse,
   LiveJobHuntResponse,
   ModelListResponse,
+  PlatformInsights,
+  RecruiterContactResponse,
   ResumeAnalysis,
   ResumeChatResponse,
+  CoverLetterResponse,
   ResumeEvaluationResponse,
   ResumeParseResponse,
   ResumeReviewResponse,
@@ -26,7 +29,25 @@ import type {
   SelfHealingStatus,
   Session,
   TaskPayload,
+  User,
+  UserProfile,
 } from './types'
+
+const JWT_KEY = 'actypity_jwt'
+
+export function getStoredJwt(): string {
+  if (typeof window === 'undefined') return ''
+  return window.localStorage.getItem(JWT_KEY) || ''
+}
+
+export function setStoredJwt(token: string): void {
+  if (typeof window === 'undefined') return
+  if (token) {
+    window.localStorage.setItem(JWT_KEY, token)
+  } else {
+    window.localStorage.removeItem(JWT_KEY)
+  }
+}
 
 const API_BASE_URL = (
   import.meta.env.VITE_API_BASE_URL || 'http://localhost:9500'
@@ -109,6 +130,52 @@ export const api = {
       body: JSON.stringify({ provider, token, email, full_name: name, social_id: socialId }),
     }),
   getMe: (token: string) => request<Session['user']>(`/users/me?token=${encodeURIComponent(token)}`),
+  googleAuth: (idToken: string) =>
+    request<{ access_token: string; token_type: string; user: User }>('/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ id_token: idToken }),
+    }),
+  getAuthMe: (jwt: string) =>
+    fetch(`${API_BASE_URL}/auth/me`, {
+      headers: { Authorization: `Bearer ${jwt}` },
+    }).then(async (r) => {
+      if (!r.ok) throw new Error(`Auth check failed: ${r.status}`)
+      return r.json() as Promise<User>
+    }),
+  getMyProfile: (jwt: string) =>
+    fetch(`${API_BASE_URL}/users/me/profile`, {
+      headers: { Authorization: `Bearer ${jwt}` },
+    }).then(async (r) => {
+      if (!r.ok) throw new Error(`Profile fetch failed: ${r.status}`)
+      return r.json() as Promise<UserProfile>
+    }),
+  updateMyProfile: (jwt: string, body: Record<string, unknown>) =>
+    fetch(`${API_BASE_URL}/users/me/profile`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${jwt}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(async (r) => {
+      if (!r.ok) throw new Error(`Profile update failed: ${r.status}`)
+      return r.json() as Promise<UserProfile>
+    }),
+  parseResumeAuthenticated: async (file: File, jwt: string): Promise<ResumeParseResponse> => {
+    const formData = new FormData()
+    formData.append('file', file)
+    const apiKey = getStoredApiKey()
+    const headers = new Headers()
+    if (apiKey) headers.set('X-API-Key', apiKey)
+    if (jwt) headers.set('Authorization', `Bearer ${jwt}`)
+    const response = await fetch(`${API_BASE_URL}/resume/parse`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({})) as { detail?: string }
+      throw new Error(payload.detail || `Parse failed: ${response.status}`)
+    }
+    return response.json() as Promise<ResumeParseResponse>
+  },
 
   parseResume: async (file: File): Promise<ResumeParseResponse> => {
     const formData = new FormData()
@@ -184,6 +251,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ text, jd_text: jdText, target_role: targetRole, model_profile: modelProfile }),
     }),
+  createCoverLetter: (payload: {
+    resume_text: string
+    jd_text?: string
+    target_role: string
+    company_name: string
+    hiring_manager_name?: string
+    tone?: string
+    model_profile?: string
+  }) =>
+    request<CoverLetterResponse>('/resume/cover-letter', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   huntJobs: (payload: {
     resume_text: string
     location?: string
@@ -200,7 +280,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  discoverRecruiterContacts: (payload: {
+    company_name: string
+    company_domain?: string
+    job_url?: string
+    source_text?: string
+    target_role?: string
+  }) =>
+    request<RecruiterContactResponse>('/job/recruiter-contacts', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   getAnalytics: () => request<CareerAnalytics>('/tracker/analytics'),
+  getPlatformInsights: () => request<PlatformInsights>('/platform/insights'),
   chat: (payload: { message: string; session_id: string; resume_text?: string; jd_text?: string }) =>
     request<{ session_id: string; response: string; provider: string; used_llm: boolean; turn: number }>('/chat', {
       method: 'POST',

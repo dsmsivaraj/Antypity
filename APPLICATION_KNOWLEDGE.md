@@ -10,11 +10,14 @@ The product combines:
 - multi-provider model routing (Gemini, Azure OpenAI, Ollama, llama-cpp, deterministic fallback)
 - local-first resume and JD processing
 - ATS keyword analysis, seniority-aware role recommendations, resume Q&A
+- recruiter-ready cover letter generation grounded in resume and JD evidence
+- recruiter and HR contact discovery from company pages, inferred mailboxes, and LinkedIn lookup flows
 - live job search pipeline (Remotive listings + India portal deep-search links)
 - per-job ATS fit scoring and improvement recommendations
 - multi-turn AI career coaching chatbot with session persistence
 - Figma-oriented resume template generation
 - PostgreSQL-backed observability, platform state, and career records
+- retrieval-backed resume chat context injection for more grounded answers
 - in-process self-healing controller with diagnostics loop
 
 ---
@@ -31,8 +34,10 @@ Primary entry points:
 | `backend/container.py` | App container wiring — all clients, services, agents, and scheduler |
 | `backend/config.py` | Settings dataclass, env var parsing, feature flags |
 | `backend/model_router.py` | Model catalog, profile-based routing across all LLM providers |
-| `backend/career_service.py` | Resume parsing, ATS analysis, chat, job search, live hunt, template design |
+| `backend/career_service.py` | Resume parsing, ATS analysis, chat, job search, live hunt, cover letters, recruiter-contact discovery, template design |
 | `backend/database.py` | PostgreSQL client — all platform and career record persistence |
+| `backend/embeddings_service.py` | Retrieval index abstraction — FAISS when available, token-index fallback otherwise |
+| `backend/retrieval.py` | Thin retrieval wrapper used by resume chat and future RAG paths |
 | `backend/gemini_client.py` | Google Gemini REST API client (`X-goog-api-key`, `generateContent`) |
 | `backend/llm_client.py` | Azure OpenAI client with try/except safety |
 | `backend/local_llm.py` | Ollama inference client |
@@ -57,8 +62,8 @@ Primary files:
 | `frontend/src/api.ts` | Typed HTTP client for all backend endpoints |
 | `frontend/src/types.ts` | All shared TypeScript interfaces |
 | `frontend/src/ChatPage.tsx` | Multi-turn chatbot page (self-managing state) |
-| `frontend/src/JobsPage.tsx` | JD extraction, job search, live job hunt (prop-based) |
-| `frontend/src/JobHuntPage.tsx` | Live job hunt tab with ATS-scored listings and portal links |
+| `frontend/src/JobsPage.tsx` | JD extraction, job search, and mounted advanced job-hunt workspace |
+| `frontend/src/JobHuntPage.tsx` | Advanced jobs workspace: live hunt, AI hunt, evaluate, write, review |
 | `frontend/src/TemplatesPage.tsx` | Template browser and AI design studio (prop-based) |
 | `frontend/src/App.css` | Global styles |
 
@@ -67,7 +72,7 @@ Pages:
 - **overview** — agent orchestration console, diagnostics, metrics, self-healing status
 - **resume** — resume upload/parse, ATS analysis, resume Q&A, evaluate/write/review
 - **chat** — multi-turn AI career coaching chatbot
-- **jobs** — JD extraction, multi-portal search link generation, live job hunt
+- **jobs** — JD extraction, multi-portal search, live hunt, AI hunt, resume evaluation/writing/review
 - **templates** — template browser and AI template design studio
 
 ---
@@ -194,6 +199,25 @@ User tables (PostgreSQL):
 - `user_sessions`
 - `user_profiles`
 
+Retrieval state:
+
+- PostgreSQL `resume_embeddings` with `pgvector` for primary semantic retrieval
+- hybrid retrieval flow: vector candidates + lexical candidates + application-side reranking
+- PostgreSQL `response_quality_metrics` for grounding, citation coverage, confidence, and drift alerts
+- `backend/data/embeddings.json`
+- `backend/data/embeddings_meta.json`
+
+Important: the application now writes and queries resume embeddings through PostgreSQL `pgvector` when the extension and embedding model are available. The legacy local files remain as a compatibility fallback and migration source, controlled by `RETRIEVAL_LOCAL_FALLBACK_ENABLED`.
+
+Quality and provenance state:
+
+- `/resume/chat` returns citations and confidence from retrieval-backed grounding
+- `/resume/cover-letter` returns citations and confidence from resume/JD evidence extraction
+- `/job/extract` returns evidence snippets and confidence for manual text and trusted-source extraction
+- `/job/recruiter-contacts` returns verified vs inferred counts, confidence, and provenance sources
+- `/platform/insights` exposes retrieval metrics plus quality metrics from `response_quality_metrics`
+- `/tracker/analytics` now includes quality totals, average grounding score, average citation count, and drift alerts
+
 ---
 
 ## Trusted job sources
@@ -250,8 +274,9 @@ Does not proxy to an external port — runs fully in-process.
 | `POST` | `/execute` | viewer |
 | `GET` | `/executions` | viewer |
 | `GET` | `/metrics` | viewer |
+| `GET` | `/platform/insights` | viewer |
 | `GET` | `/logs` | viewer |
-| `POST` | `/bootstrap` | open (once) |
+| `POST` | `/auth/bootstrap` | open (once) |
 | `POST` | `/auth/keys` | admin |
 | `GET` | `/auth/keys` | admin |
 | `DELETE` | `/auth/keys/{id}` | admin |
@@ -272,9 +297,8 @@ Does not proxy to an external port — runs fully in-process.
 |--------|------|------|
 | `POST` | `/diagnostics/run` | viewer |
 | `GET` | `/diagnostics/reports` | viewer |
-| `GET` | `/diagnostics/latest` | viewer |
-| `GET` | `/self-healing/status` | open |
-| `POST` | `/self-healing/trigger` | viewer |
+| `GET` | `/diagnostics/reports/latest` | viewer |
+| `GET` | `/self-healing/status` | viewer |
 
 ### Resume / career
 
@@ -283,6 +307,7 @@ Does not proxy to an external port — runs fully in-process.
 | `POST` | `/resume/parse` | viewer |
 | `POST` | `/resume/analyze` | viewer |
 | `POST` | `/resume/chat` | viewer |
+| `POST` | `/resume/cover-letter` | viewer |
 | `GET` | `/resume/templates` | viewer |
 | `POST` | `/resume/templates/design` | viewer |
 | `POST` | `/resume/evaluate` | viewer |
@@ -297,7 +322,8 @@ Does not proxy to an external port — runs fully in-process.
 | `GET` | `/job/sources` | viewer |
 | `POST` | `/job/extract` | viewer |
 | `POST` | `/job/search` | viewer |
-| `POST` | `/resume/hunt` | viewer |
+| `POST` | `/job/recruiter-contacts` | viewer |
+| `POST` | `/jobs/hunt` | viewer |
 | `POST` | `/jobs/live-hunt` | viewer |
 
 ### Chat
@@ -336,6 +362,11 @@ Does not proxy to an external port — runs fully in-process.
 | G10 | No formal migration framework | `backend/database.py` | Open |
 | G11 | Gemini API key on free tier — quota limit is 0 | `.env` | Open — needs paid billing |
 | G12 | Remotive free API returns only ~21 jobs (fixed pool) | `backend/job_search_service.py` | Open — use RapidAPI for scale |
+| G13 | `/platform/insights` originally reported scheduler state instead of self-healing state | `backend/main.py` | **FIXED** |
+| G14 | Retrieval fallback still relies on local JSON files when pgvector or embeddings are unavailable | `backend/embeddings_service.py`, `backend/embeddings.py` | Open |
+| G15 | No prompt registry/versioning for resume, cover-letter, recruiter-contact, and chat prompts | `agents/`, `backend/career_service.py` | Open |
+| G16 | No explicit hallucination scoring, citation coverage, or retrieval hit-rate metrics | `backend/metrics.py` | Open |
+| G17 | No drift monitoring on job-source quality, ATS scoring quality, or prompt regressions | platform-wide | Open |
 
 ---
 
@@ -347,3 +378,87 @@ Does not proxy to an external port — runs fully in-process.
 - Platform logs, metrics, agent registry, workflows, and career records stay PostgreSQL-backed.
 - Route handlers must not instantiate LLM or scraping clients directly.
 - Model profile selection is per-request via `model_profile` field; omitting it uses the default profile.
+
+---
+
+## Additional requirements and enhancement possibilities
+
+- Add saved searches, application pipelines, alerting, and recruiter outreach workspaces per user.
+- Add normalized job deduplication across portals so analytics and recommendations are based on canonical opportunities.
+- Add source provenance and confidence on JD extraction, recruiter-contact discovery, and resume-chat answers.
+- Add `pgvector` or another vector backend so retrieval moves out of local JSON files and becomes multi-user safe.
+- Add prompt versioning, rollout control, offline evaluation scores, and rollback metadata.
+- Add latency, retrieval, and answer-quality dashboards for production operations.
+- Add employer/recruiter feedback capture so resume-fit scoring can improve based on real outcomes.
+
+---
+
+## Accuracy, hallucination, and drift plan
+
+Current state:
+
+- Resume chat now returns retrieval citations and a coarse confidence signal, but grounding is still not a hard trust boundary for every generative endpoint.
+- Cover letters and recruiter-contact discovery rely mainly on prompt discipline and heuristics.
+- Retrieval metrics are now persisted and surfaced, but answer-faithfulness scoring is still incomplete.
+
+Near-term implementation plan:
+
+1. Add evidence-first response contracts.
+Return `sources`, `citations`, and `confidence` fields for resume chat, JD extraction, and recruiter-contact discovery.
+
+2. Add retrieval quality metrics.
+Track retrieval hit-rate, empty-context rate, citation coverage, and fallback rate in PostgreSQL.
+
+3. Add prompt governance.
+Version prompts used by `career_service` and `chatbot_agent`, persist the prompt version on every execution, and compare quality offline.
+
+4. Add drift monitoring.
+Detect changes in job-source freshness, ATS keyword distribution, recruiter-contact discovery confidence, and model-output length/quality trends.
+
+5. Add answer verification.
+Run a lightweight critic or rules-based verifier for high-impact outputs like cover letters, recruiter emails, and tailored applications.
+
+---
+
+## Hybrid RAG roadmap
+
+Recommended target architecture:
+
+1. Keep PostgreSQL as the system of record.
+2. Add `pgvector` for resumes, JDs, company pages, recruiter pages, and curated job-description chunks.
+3. Use hybrid retrieval:
+lexical filtering for exact titles, skills, companies, and locations.
+semantic retrieval for similarity and paraphrase coverage.
+re-ranking for final context selection.
+4. Attach provenance to every chunk so the application can show where a recommendation came from.
+5. Cache high-value retrieval bundles per user/session to reduce latency and repeated embedding work.
+
+Expected benefits:
+
+- better resume Q&A accuracy
+- stronger cover-letter grounding
+- better JD understanding across noisy portal text
+- lower hallucination risk because evidence becomes mandatory input rather than optional context
+
+---
+
+## Fine-tuning feasibility
+
+Fine-tuning is possible, but it should not be the first quality investment.
+
+Recommended order:
+
+1. prompt versioning
+2. retrieval quality and provenance
+3. offline evaluation datasets
+4. drift monitoring
+5. then domain tuning or preference tuning
+
+Best candidates for future tuning:
+
+- resume rewrite style adaptation
+- cover-letter tone control
+- recruiter-contact ranking
+- job-fit explanation style
+
+Avoid tuning before evidence quality is solved, otherwise the system will learn to produce more confident errors rather than better grounded outputs.

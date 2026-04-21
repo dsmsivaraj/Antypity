@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 from .config import Settings
 from .database import PostgreSQLDatabaseClient
 from .model_router import ModelRouter
+from .prompt_registry import register_prompt
 
 TRUSTED_JOB_PORTALS: Dict[str, Dict[str, Any]] = {
     "linkedin": {
@@ -96,6 +97,7 @@ class ParsedResume:
     filename: str
     text: str
     metadata: Dict[str, Any]
+    parsed_fields: Dict[str, Any]
 
 
 class CareerService:
@@ -105,10 +107,12 @@ class CareerService:
         settings: Settings,
         model_router: ModelRouter,
         database_client: PostgreSQLDatabaseClient,
+        embedding_service=None,
     ) -> None:
         self.settings = settings
         self.model_router = model_router
         self.database_client = database_client
+        self._embedding_service = embedding_service
 
     def trusted_sources(self) -> List[Dict[str, Any]]:
         allowed = set(self.settings.trusted_job_sources)
@@ -139,7 +143,9 @@ class CareerService:
         else:
             raise ValueError("Unsupported file format. Supported formats: pdf, docx, txt.")
 
-        return ParsedResume(filename=filename, text=text, metadata=metadata)
+        from .resume_parser import parse_resume_text
+        parsed_fields = parse_resume_text(text)
+        return ParsedResume(filename=filename, text=text, metadata=metadata, parsed_fields=parsed_fields)
 
     def analyze_resume(
         self,
@@ -190,8 +196,47 @@ class CareerService:
             "used_llm": completion.used_llm,
             "provider": completion.provider,
         }
+        try:
+            # register prompt version for governance
+            pmeta = register_prompt("resume_analyze", summary_seed)
+            record.setdefault('metadata', {})
+            record['metadata']['prompt_version'] = pmeta.get('version')
+        except Exception:
+            pass
+
+        # persist analysis
         if self.database_client.is_configured:
             self.database_client.save_resume_analysis(record)
+
+        # create section embeddings for RAG
+        try:
+            from .embeddings_service import get_embedding_service
+
+            embedding_svc = self._embedding_service or get_embedding_service()
+
+            # split resume into heuristic sections by headings
+            sections = []
+            lines = resume_text.splitlines()
+            current = []
+            section_id = 0
+            for ln in lines:
+                if ln.strip().endswith((':', '：')) or ln.strip().lower() in ('experience', 'education', 'skills', 'summary'):
+                    if current:
+                        sections.append(('section-' + str(section_id), '\n'.join(current)))
+                        section_id += 1
+                        current = []
+                    current.append(ln)
+                else:
+                    current.append(ln)
+            if current:
+                sections.append(('section-' + str(section_id), '\n'.join(current)))
+
+            for sid, stext in sections:
+                embedding_svc.index_document(record["id"], sid, stext)
+        except Exception:
+            # embedding service is optional — ignore failures in environments without it
+            pass
+
         return record
 
     def chat_resume(
@@ -202,28 +247,275 @@ class CareerService:
         jd_text: str,
         model_profile: Optional[str],
     ) -> Dict[str, Any]:
-        profile, completion = self.model_router.complete(
-            model_profile=model_profile or self._preferred_profile("resume"),
-            prompt=(
+        contexts: List[Dict[str, Any]] = []
+        retrieval_used = False
+        # Retrieve relevant resume sections for RAG
+        try:
+            from .retrieval import get_context_blocks
+
+            contexts = get_context_blocks(question + "\n" + resume_text, top_k=3)
+            retrieval_used = len(contexts) > 0
+            context_text = "\n\n".join([f"[{c['doc_id']}:{c['section_id']}] {c['text']}" for c in contexts])
+            prompt_body = (
+                "Relevant resume sections:\n" + context_text + "\n\n"
                 f"Resume:\n{resume_text[:5000]}\n\n"
                 f"Job description:\n{jd_text[:5000]}\n\n"
                 f"Question:\n{question}"
-            ),
+            )
+        except Exception:
+            # retrieval is optional; fall back to original prompt
+            prompt_body = (
+                f"Resume:\n{resume_text[:5000]}\n\n"
+                f"Job description:\n{jd_text[:5000]}\n\n"
+                f"Question:\n{question}"
+            )
+
+        profile, completion = self.model_router.complete(
+            model_profile=model_profile or self._preferred_profile("resume"),
+            prompt=prompt_body,
             system_prompt=(
                 "You are a resume copilot. Answer precisely, quote relevant experience, suggest edits if needed, "
                 "and keep the reply concise and recruiter-friendly."
             ),
+        )
+        try:
+            pmeta = register_prompt("resume_chat", prompt_body)
+            prompt_version = pmeta.get('version')
+        except Exception:
+            prompt_version = None
+        grounding_score = self._score_resume_chat_grounding(contexts)
+        confidence = self._confidence_from_grounding(
+            grounding_score=grounding_score,
+            citation_count=len(contexts[:3]),
+            drift_flag=not retrieval_used,
+        )
+        self._record_quality_metric(
+            response_type="resume_chat",
+            grounding_score=grounding_score,
+            citation_count=len(contexts[:3]),
+            confidence=confidence,
+            drift_flag=not retrieval_used,
+            metadata={
+                "question": question[:500],
+                "model_profile": profile.id,
+                "used_llm": completion.used_llm,
+            },
         )
         return {
             "answer": completion.content,
             "used_llm": completion.used_llm,
             "provider": completion.provider,
             "model_profile": profile.id,
+            "citations": [
+                {
+                    "doc_id": c.get("doc_id"),
+                    "section_id": c.get("section_id"),
+                    "excerpt": c.get("text"),
+                    "score": round(float(c.get("score", 0.0)), 4),
+                    "source_type": "resume_embedding",
+                }
+                for c in contexts[:3]
+            ],
+            "confidence": confidence,
+            "prompt_version": prompt_version,
             "suggested_questions": [
                 "Which bullets should I rewrite for ATS?",
                 "What keywords are still missing for this role?",
                 "How should I tighten the summary for this position?",
+                "Draft a cover letter for this job.",
+                "Where should I look for recruiter or HR contacts for this role?",
             ],
+        }
+
+    def create_cover_letter(
+        self,
+        *,
+        resume_text: str,
+        jd_text: str,
+        target_role: str,
+        company_name: str,
+        hiring_manager_name: str,
+        tone: str,
+        model_profile: Optional[str],
+        created_by: Optional[str],
+    ) -> Dict[str, Any]:
+        manager_line = hiring_manager_name.strip() or "Hiring Manager"
+        profile, completion = self.model_router.complete(
+            model_profile=model_profile or self._preferred_profile("resume"),
+            prompt=(
+                f"Target role: {target_role}\n"
+                f"Company: {company_name}\n"
+                f"Hiring manager: {manager_line}\n"
+                f"Tone: {tone}\n\n"
+                f"Resume:\n{resume_text[:5000]}\n\n"
+                f"Job description:\n{jd_text[:4000]}\n"
+            ),
+            system_prompt=(
+                "You are an expert career strategist and recruiter-facing writer. "
+                "Write a concise, evidence-based cover letter that sounds credible, avoids cliches, "
+                "anchors claims in resume evidence, and mirrors the target role's language. "
+                "Start with a compelling subject line on the first line using the format 'Subject: ...', "
+                "then write the cover letter body in 3 short paragraphs, and finish with a strong closing sentence. "
+                "After the letter, add a section called 'Talking Points:' with 3 bullet points."
+            ),
+        )
+        subject_line, cover_letter, talking_points = self._split_cover_letter_response(completion.content, target_role, company_name)
+        record = {
+            "id": str(uuid4()),
+            "query_type": "cover_letter",
+            "query_text": f"{company_name}::{target_role}",
+            "sources": ["resume", "job_description"],
+            "result_count": len(talking_points),
+            "metadata": {
+                "company_name": company_name,
+                "target_role": target_role,
+                "subject_line": subject_line,
+                "tone": tone,
+                "model_profile": profile.id,
+            },
+            "created_by": created_by,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            prompt_text = (
+                f"Target role: {target_role}\n"
+                f"Company: {company_name}\n"
+                f"Hiring manager: {manager_line}\n"
+                f"Tone: {tone}\n\n"
+                f"Resume:\n{resume_text[:5000]}\n\n"
+                f"Job description:\n{jd_text[:4000]}\n"
+            )
+            pmeta = register_prompt("cover_letter", prompt_text)
+            record.setdefault('metadata', {})
+            record['metadata']['prompt_version'] = pmeta.get('version')
+        except Exception:
+            pass
+
+        if self.database_client.is_configured:
+            self.database_client.save_career_query(record)
+        evidence_terms = self._shared_evidence_terms(resume_text, jd_text, limit=6)
+        citations = self._build_text_citations(
+            sources=[
+                ("resume", resume_text),
+                ("job_description", jd_text),
+            ],
+            focus_terms=evidence_terms or self._extract_keywords(target_role),
+            limit=4,
+        )
+        grounding_score = self._score_grounding(citations=citations, evidence_terms=evidence_terms, target_terms=6)
+        confidence = self._confidence_from_grounding(
+            grounding_score=grounding_score,
+            citation_count=len(citations),
+            drift_flag=not citations,
+        )
+        self._record_quality_metric(
+            response_type="cover_letter",
+            grounding_score=grounding_score,
+            citation_count=len(citations),
+            confidence=confidence,
+            drift_flag=not citations,
+            metadata={
+                "company_name": company_name,
+                "target_role": target_role,
+                "model_profile": profile.id,
+                "used_llm": completion.used_llm,
+            },
+        )
+        return {
+            "company_name": company_name,
+            "target_role": target_role,
+            "subject_line": subject_line,
+            "cover_letter": cover_letter,
+            "talking_points": talking_points,
+            "citations": citations,
+            "confidence": confidence,
+            "used_llm": completion.used_llm,
+            "provider": completion.provider,
+            "model_profile": profile.id,
+            "prompt_version": record.get('metadata', {}).get('prompt_version'),
+        }
+
+    async def discover_recruiter_contacts(
+        self,
+        *,
+        company_name: str,
+        company_domain: str,
+        job_url: str,
+        source_text: str,
+        target_role: str,
+        created_by: Optional[str],
+    ) -> Dict[str, Any]:
+        normalized_domain = self._normalize_company_domain(company_domain or self._derive_company_domain(job_url))
+        contacts: List[Dict[str, Any]] = []
+        lookup_urls = self._build_contact_lookup_urls(company_name, normalized_domain, target_role)
+
+        if source_text.strip():
+            contacts.extend(self._extract_contacts_from_text(source_text, source="provided-text"))
+
+        if normalized_domain:
+            page_urls = self._company_lookup_pages(normalized_domain)
+            async with httpx.AsyncClient(timeout=8.0, headers={"User-Agent": "Actypity/2.1"}) as client:
+                for url in page_urls:
+                    try:
+                        response = await client.get(url)
+                        if response.status_code >= 400:
+                            continue
+                        contacts.extend(self._extract_contacts_from_text(response.text, source=url))
+                    except httpx.HTTPError:
+                        continue
+
+            if not any(contact.get("email") for contact in contacts):
+                contacts.extend(self._inferred_role_mailboxes(company_name, normalized_domain))
+
+        deduped = self._dedupe_contacts(contacts)
+        verified_count = sum(1 for contact in deduped if contact.get("confidence") in {"high", "medium"})
+        inferred_count = sum(1 for contact in deduped if contact.get("confidence") == "low")
+        provenance = self._contact_provenance(deduped, lookup_urls)
+        confidence = self._confidence_from_grounding(
+            grounding_score=self._contact_grounding_score(verified_count=verified_count, total_count=len(deduped)),
+            citation_count=len(provenance),
+            drift_flag=verified_count == 0 and inferred_count > 0,
+        )
+        if self.database_client.is_configured:
+            self.database_client.save_career_query(
+                {
+                    "id": str(uuid4()),
+                    "query_type": "recruiter_contacts",
+                    "query_text": company_name,
+                    "sources": [url for url in lookup_urls[:8]],
+                    "result_count": len(deduped),
+                    "metadata": {
+                        "company_domain": normalized_domain,
+                        "job_url": job_url,
+                        "target_role": target_role,
+                    },
+                    "created_by": created_by,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+        self._record_quality_metric(
+            response_type="recruiter_contacts",
+            grounding_score=self._contact_grounding_score(verified_count=verified_count, total_count=len(deduped)),
+            citation_count=len(provenance),
+            confidence=confidence,
+            drift_flag=verified_count == 0 and inferred_count > 0,
+            metadata={
+                "company_name": company_name,
+                "company_domain": normalized_domain,
+                "verified_contact_count": verified_count,
+                "inferred_contact_count": inferred_count,
+            },
+        )
+
+        return {
+            "company_name": company_name,
+            "company_domain": normalized_domain or None,
+            "contacts": deduped,
+            "lookup_urls": lookup_urls,
+            "verified_contact_count": verified_count,
+            "inferred_contact_count": inferred_count,
+            "confidence": confidence,
+            "provenance": provenance,
         }
 
     def list_templates(self) -> List[Dict[str, Any]]:
@@ -290,6 +582,24 @@ class CareerService:
     ) -> Dict[str, Any]:
         if text and text.strip():
             cleaned = text.strip()
+            citations = self._build_text_citations(
+                sources=[("manual", cleaned)],
+                focus_terms=self._extract_keywords(cleaned),
+                limit=3,
+            )
+            confidence = self._confidence_from_grounding(
+                grounding_score=self._score_grounding(citations=citations, evidence_terms=self._extract_keywords(cleaned), target_terms=6),
+                citation_count=len(citations),
+                drift_flag=False,
+            )
+            self._record_quality_metric(
+                response_type="job_extract",
+                grounding_score=self._score_grounding(citations=citations, evidence_terms=self._extract_keywords(cleaned), target_terms=6),
+                citation_count=len(citations),
+                confidence=confidence,
+                drift_flag=False,
+                metadata={"source_type": "manual"},
+            )
             return {
                 "title": "Manual job description",
                 "company": "Provided manually",
@@ -297,6 +607,8 @@ class CareerService:
                 "source": "manual",
                 "source_type": "manual",
                 "keywords": sorted(self._extract_keywords(cleaned))[:20],
+                "citations": citations,
+                "confidence": confidence,
             }
         if not url:
             raise ValueError("Either a job description URL or raw text must be provided.")
@@ -308,6 +620,24 @@ class CareerService:
         soup = BeautifulSoup(response.text, "html.parser")
         title = soup.title.string.strip() if soup.title and soup.title.string else "Job description"
         description = self._normalize_whitespace(soup.get_text(" ", strip=True))[:8000]
+        citations = self._build_text_citations(
+            sources=[(source_id, description)],
+            focus_terms=self._extract_keywords(description),
+            limit=3,
+        )
+        confidence = self._confidence_from_grounding(
+            grounding_score=self._score_grounding(citations=citations, evidence_terms=self._extract_keywords(description), target_terms=8),
+            citation_count=len(citations),
+            drift_flag=len(description) < 200,
+        )
+        self._record_quality_metric(
+            response_type="job_extract",
+            grounding_score=self._score_grounding(citations=citations, evidence_terms=self._extract_keywords(description), target_terms=8),
+            citation_count=len(citations),
+            confidence=confidence,
+            drift_flag=len(description) < 200,
+            metadata={"source_type": source_id, "source": url},
+        )
         return {
             "title": title,
             "company": self._guess_company_from_title(title),
@@ -315,6 +645,8 @@ class CareerService:
             "source": url,
             "source_type": source_id,
             "keywords": sorted(self._extract_keywords(description))[:20],
+            "citations": citations,
+            "confidence": confidence,
         }
 
     def search_jobs(
@@ -618,6 +950,10 @@ class CareerService:
             "total_job_results": 0,
             "average_match_score": 0.0,
             "top_sources": {},
+            "quality_total_evaluations": 0,
+            "quality_avg_grounding_score": 0.0,
+            "quality_avg_citation_count": 0.0,
+            "quality_drift_alerts": 0,
         }
 
     def _preferred_profile(self, workload: str) -> Optional[str]:
@@ -632,6 +968,219 @@ class CareerService:
         if self.settings.azure_openai_deployment:
             return "azure-general"
         return None
+
+    def _split_cover_letter_response(self, response: str, target_role: str, company_name: str) -> tuple[str, str, List[str]]:
+        lines = [line.strip() for line in response.splitlines() if line.strip()]
+        subject_line = next((line.replace("Subject:", "", 1).strip() for line in lines if line.lower().startswith("subject:")), f"Application for {target_role} at {company_name}")
+        if "Talking Points:" in response:
+            letter_part, talking_part = response.split("Talking Points:", 1)
+            letter_lines = [line for line in letter_part.splitlines() if line.strip() and not line.lower().startswith("subject:")]
+            talking_points = [
+                re.sub(r"^[\-\*\d\.\)\s]+", "", line).strip()
+                for line in talking_part.splitlines()
+                if re.sub(r"^[\-\*\d\.\)\s]+", "", line).strip()
+            ][:5]
+            return subject_line, "\n".join(letter_lines).strip(), talking_points
+        letter_lines = [line for line in response.splitlines() if line.strip() and not line.lower().startswith("subject:")]
+        talking_points = self._extract_bullets(response, limit=3)
+        return subject_line, "\n".join(letter_lines).strip(), talking_points
+
+    def _normalize_company_domain(self, company_domain: str) -> str:
+        domain = company_domain.strip().lower()
+        domain = re.sub(r"^https?://", "", domain)
+        domain = domain.split("/")[0]
+        return domain.removeprefix("www.")
+
+    def _derive_company_domain(self, url: str) -> str:
+        if not url:
+            return ""
+        host = (urlparse(url).hostname or "").lower()
+        return host.removeprefix("www.")
+
+    def _extract_contacts_from_text(self, text: str, *, source: str) -> List[Dict[str, Any]]:
+        emails = sorted(set(re.findall(r"[\w\.-]+@[\w\.-]+\.[a-zA-Z]{2,}", text)))
+        contacts = []
+        for email in emails:
+            title = "Recruiting Contact"
+            lowered = text.lower()
+            if "talent" in lowered or "talent acquisition" in lowered:
+                title = "Talent Acquisition"
+            elif "human resources" in lowered or "hr" in lowered:
+                title = "HR Contact"
+            contacts.append(
+                {
+                    "name": email.split("@", 1)[0].replace(".", " ").replace("_", " ").title(),
+                    "title": title,
+                    "email": email,
+                    "contact_url": None,
+                    "source": source,
+                    "confidence": "high",
+                    "notes": "Discovered from provided text or company page content.",
+                }
+            )
+        return contacts
+
+    def _company_lookup_pages(self, company_domain: str) -> List[str]:
+        if not company_domain:
+            return []
+        return [
+            f"https://{company_domain}",
+            f"https://{company_domain}/careers",
+            f"https://{company_domain}/jobs",
+            f"https://{company_domain}/contact",
+            f"https://{company_domain}/about",
+            f"https://{company_domain}/team",
+        ]
+
+    def _build_contact_lookup_urls(self, company_name: str, company_domain: str, target_role: str) -> List[str]:
+        urls = []
+        keyword = quote_plus(f"{company_name} recruiter {target_role}".strip())
+        if company_domain:
+            urls.extend(self._company_lookup_pages(company_domain))
+        urls.extend(
+            [
+                f"https://www.linkedin.com/search/results/people/?keywords={keyword}",
+                f"https://www.linkedin.com/company/{quote_plus(company_name.lower().replace(' ', '-'))}/people/",
+            ]
+        )
+        return urls
+
+    def _inferred_role_mailboxes(self, company_name: str, company_domain: str) -> List[Dict[str, Any]]:
+        aliases = ["careers", "recruiting", "recruiter", "talent", "talent.acquisition", "hr", "jobs"]
+        contacts = []
+        for alias in aliases:
+            contacts.append(
+                {
+                    "name": f"{company_name} Recruiting",
+                    "title": "Recruiting Mailbox",
+                    "email": f"{alias}@{company_domain}",
+                    "contact_url": f"https://{company_domain}/careers",
+                    "source": "inferred-company-pattern",
+                    "confidence": "low",
+                    "notes": "Inferred from common recruiting mailbox patterns. Verify before outreach.",
+                }
+            )
+        return contacts
+
+    def _dedupe_contacts(self, contacts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        deduped: Dict[str, Dict[str, Any]] = {}
+        for contact in contacts:
+            key = (contact.get("email") or contact.get("contact_url") or contact.get("name") or str(uuid4())).lower()
+            if key not in deduped:
+                deduped[key] = contact
+        return list(deduped.values())[:20]
+
+    def _record_quality_metric(
+        self,
+        *,
+        response_type: str,
+        grounding_score: int,
+        citation_count: int,
+        confidence: str,
+        drift_flag: bool,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not self.database_client.is_configured:
+            return
+        try:
+            self.database_client.record_response_quality_metric(
+                response_type=response_type,
+                grounding_score=grounding_score,
+                citation_count=citation_count,
+                confidence=confidence,
+                drift_flag=drift_flag,
+                metadata=metadata,
+            )
+        except Exception:
+            pass
+
+    def _shared_evidence_terms(self, resume_text: str, jd_text: str, limit: int = 6) -> List[str]:
+        resume_keywords = self._extract_keywords(resume_text)
+        jd_keywords = self._extract_keywords(jd_text)
+        return sorted(resume_keywords & jd_keywords)[:limit]
+
+    def _build_text_citations(
+        self,
+        *,
+        sources: List[tuple[str, str]],
+        focus_terms: set[str] | List[str],
+        limit: int = 3,
+    ) -> List[Dict[str, Any]]:
+        terms = [term for term in focus_terms if term][:8]
+        citations: List[Dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for source_name, raw_text in sources:
+            if not raw_text:
+                continue
+            normalized = self._normalize_whitespace(raw_text)
+            sentences = re.split(r"(?<=[\.\!\?])\s+", normalized)
+            for sentence in sentences:
+                sentence_clean = self._normalize_whitespace(sentence)
+                if len(sentence_clean) < 30:
+                    continue
+                matched_terms = [term for term in terms if term.lower() in sentence_clean.lower()]
+                if not matched_terms:
+                    continue
+                excerpt = sentence_clean[:280]
+                key = (source_name, excerpt)
+                if key in seen:
+                    continue
+                seen.add(key)
+                citations.append(
+                    {
+                        "source_type": source_name,
+                        "excerpt": excerpt,
+                        "matched_terms": matched_terms[:4],
+                    }
+                )
+                if len(citations) >= limit:
+                    return citations
+        return citations
+
+    def _score_grounding(
+        self,
+        *,
+        citations: List[Dict[str, Any]],
+        evidence_terms: set[str] | List[str],
+        target_terms: int,
+    ) -> int:
+        term_count = min(len(list(evidence_terms)), target_terms)
+        citation_score = min(len(citations) * 25, 75)
+        term_score = min(term_count * 5, 25)
+        return max(0, min(100, citation_score + term_score))
+
+    def _score_resume_chat_grounding(self, contexts: List[Dict[str, Any]]) -> int:
+        avg_similarity = 0.0
+        if contexts:
+            avg_similarity = sum(float(item.get("score", 0.0)) for item in contexts[:3]) / min(len(contexts), 3)
+        normalized_similarity = max(0, min(25, round(avg_similarity * 25)))
+        return max(0, min(100, len(contexts[:3]) * 25 + normalized_similarity))
+
+    def _confidence_from_grounding(
+        self,
+        *,
+        grounding_score: int,
+        citation_count: int,
+        drift_flag: bool,
+    ) -> str:
+        if drift_flag and grounding_score < 50:
+            return "low"
+        if grounding_score >= 75 and citation_count >= 2:
+            return "high"
+        if grounding_score >= 45 and citation_count >= 1:
+            return "medium"
+        return "low"
+
+    def _contact_grounding_score(self, *, verified_count: int, total_count: int) -> int:
+        if total_count <= 0:
+            return 0
+        ratio = verified_count / total_count
+        return max(0, min(100, round(ratio * 100)))
+
+    def _contact_provenance(self, contacts: List[Dict[str, Any]], lookup_urls: List[str]) -> List[str]:
+        provenance = {str(contact.get("source")) for contact in contacts if contact.get("source")}
+        provenance.update(url for url in lookup_urls[:3] if url)
+        return sorted(provenance)[:8]
 
     def _validate_job_source(self, url: str) -> str:
         hostname = (urlparse(url).hostname or "").lower()

@@ -33,6 +33,8 @@ from .schemas import (
     ChatMessage,
     ChatRequest,
     ChatResponse,
+    CoverLetterRequest,
+    CoverLetterResponse,
     DiagnosticIssue,
     DiagnosticRunListResponse,
     DiagnosticRunResponse,
@@ -42,6 +44,8 @@ from .schemas import (
     HealthResponse,
     JobDescriptionExtractRequest,
     JobDescriptionResponse,
+    RecruiterContactRequest,
+    RecruiterContactResponse,
     JobSearchRequest,
     JobSearchResult,
     JobSourceListResponse,
@@ -53,6 +57,7 @@ from .schemas import (
     ModelListResponse,
     ModelSummary,
     MetricsResponse,
+    PlatformInsightsResponse,
     OllamaStatusResponse,
     ReadyResponse,
     JobHuntRequest,
@@ -77,6 +82,10 @@ from .schemas import (
     ResumeWriteRequest,
     ResumeWriteResponse,
     TaskRequest,
+    GoogleAuthRequest,
+    TokenResponse,
+    UserProfileResponse,
+    UserResponse,
     WorkflowDefinitionListResponse,
     WorkflowDefinitionRequest,
     WorkflowDefinitionResponse,
@@ -217,6 +226,47 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
                 _logger.error("Social auth proxy failed: %s", exc)
                 raise HTTPException(status_code=502, detail="Identity service unreachable.")
 
+    @app.post("/auth/google", response_model=TokenResponse, tags=["auth"])
+    async def google_sign_in(request: Request, body: GoogleAuthRequest):
+        container: AppContainer = request.app.state.container
+        if not container.database_client.is_configured:
+            raise HTTPException(status_code=503, detail="Database not configured — Google Sign-In unavailable.")
+        try:
+            google_user = container.auth_service.verify_google_id_token(body.id_token)
+        except ValueError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        user = container.database_client.upsert_user(
+            email=google_user["email"],
+            full_name=google_user["full_name"],
+            social_provider="google",
+            social_id=google_user["social_id"],
+        )
+        from .jwt_utils import create_access_token
+        token = create_access_token({"sub": user["id"], "email": user["email"], "role": user.get("role", "applicant")})
+        return TokenResponse(
+            access_token=token,
+            token_type="bearer",
+            user=UserResponse(**{k: v for k, v in user.items() if k in UserResponse.model_fields}),
+        )
+
+    @app.get("/auth/me", response_model=UserResponse, tags=["auth"])
+    async def get_current_user(request: Request, authorization: Optional[str] = Header(None)):
+        container: AppContainer = request.app.state.container
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing or invalid Authorization header.")
+        from .jwt_utils import decode_access_token
+        from jose import JWTError
+        try:
+            payload = decode_access_token(authorization.removeprefix("Bearer ").strip())
+        except JWTError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        if not container.database_client.is_configured:
+            return UserResponse(id=payload.get("sub", ""), email=payload.get("email", ""), role=payload.get("role", "applicant"), status="active")
+        user = container.database_client.get_user_by_id(payload.get("sub", ""))
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found.")
+        return UserResponse(**{k: v for k, v in user.items() if k in UserResponse.model_fields})
+
     @app.get("/users/me", tags=["users"])
     async def proxy_get_me(request: Request, token: str = Query(...)):
         url = os.environ.get("IDENTITY_SERVICE_URL", "http://localhost:9504")
@@ -228,6 +278,56 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
             except Exception as exc:
                 _logger.error("Get me proxy failed: %s", exc)
                 raise HTTPException(status_code=401, detail="Invalid session.")
+
+    @app.get("/users/me/profile", response_model=UserProfileResponse, tags=["users"])
+    async def get_my_profile(request: Request, authorization: Optional[str] = Header(None)):
+        container: AppContainer = request.app.state.container
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing or invalid Authorization header.")
+        from .jwt_utils import decode_access_token
+        from jose import JWTError
+        try:
+            payload = decode_access_token(authorization.removeprefix("Bearer ").strip())
+        except JWTError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        user_id = payload.get("sub", "")
+        if not container.database_client.is_configured:
+            return UserProfileResponse(user_id=user_id)
+        profile = container.database_client.get_user_profile(user_id)
+        if not profile:
+            return UserProfileResponse(user_id=user_id)
+        return UserProfileResponse(
+            user_id=profile["user_id"],
+            resume_data=profile.get("resume_data"),
+            preferences=profile.get("preferences"),
+            updated_at=datetime.fromisoformat(profile["updated_at"]) if profile.get("updated_at") else None,
+        )
+
+    @app.patch("/users/me/profile", response_model=UserProfileResponse, tags=["users"])
+    async def update_my_profile(request: Request, body: dict, authorization: Optional[str] = Header(None)):
+        container: AppContainer = request.app.state.container
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing or invalid Authorization header.")
+        from .jwt_utils import decode_access_token
+        from jose import JWTError
+        try:
+            payload = decode_access_token(authorization.removeprefix("Bearer ").strip())
+        except JWTError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        user_id = payload.get("sub", "")
+        if not container.database_client.is_configured:
+            raise HTTPException(status_code=503, detail="Database not configured.")
+        container.database_client.upsert_user_profile(
+            user_id=user_id,
+            preferences=body.get("preferences"),
+        )
+        profile = container.database_client.get_user_profile(user_id) or {"user_id": user_id}
+        return UserProfileResponse(
+            user_id=profile["user_id"],
+            resume_data=profile.get("resume_data"),
+            preferences=profile.get("preferences"),
+            updated_at=datetime.fromisoformat(profile["updated_at"]) if profile.get("updated_at") else None,
+        )
 
     _register_routes(app)
     return app
@@ -491,6 +591,77 @@ def _register_routes(app: FastAPI) -> None:
             metrics=[AgentMetric(**r) for r in records]
         )
 
+    @app.get("/platform/insights", response_model=PlatformInsightsResponse, tags=["metrics"])
+    async def platform_insights(
+        request: Request,
+        _: dict = Depends(_require("metrics:read")),
+    ):
+        container: AppContainer = request.app.state.container
+        metrics_rows = container.metrics_service.list_all()
+        total_agent_executions = sum(int(row.get("total_executions", 0)) for row in metrics_rows)
+        llm_executions = sum(int(row.get("llm_executions", 0)) for row in metrics_rows)
+        llm_ratio = round((llm_executions / total_agent_executions) * 100, 2) if total_agent_executions else 0.0
+        retrieval_status = {
+            "backend": "unavailable",
+            "document_count": 0,
+            "model_loaded": False,
+        }
+        try:
+            from .embeddings_service import get_embedding_service
+
+            retrieval_status = get_embedding_service().status()
+        except Exception:
+            pass
+        retrieval_metrics = {
+            "total_queries": 0,
+            "avg_latency_ms": 0.0,
+            "empty_context_rate": 0.0,
+            "hit_rate": 0.0,
+        }
+        quality_metrics = {
+            "total_evaluations": 0,
+            "avg_grounding_score": 0.0,
+            "avg_citation_count": 0.0,
+            "drift_alerts": 0,
+        }
+        if container.database_client.is_configured:
+            try:
+                retrieval_metrics = container.database_client.get_retrieval_metrics_summary()
+            except Exception:
+                pass
+            try:
+                quality_metrics = container.database_client.get_response_quality_summary()
+            except Exception:
+                pass
+
+        return PlatformInsightsResponse(
+            registered_agents=len(container.registry.list_metadata()),
+            model_profiles=len(container.model_router.list_profiles()),
+            local_model_profiles=len(
+                [
+                    profile
+                    for profile in container.model_router.list_profiles()
+                    if profile.provider == "llama-cpp" or profile.provider.startswith("ollama")
+                ]
+            ),
+            metrics_rows=len(metrics_rows),
+            total_agent_executions=total_agent_executions,
+            llm_execution_ratio=llm_ratio,
+            postgres_configured=container.database_client.is_configured,
+            retrieval_backend=str(retrieval_status.get("backend", "unavailable")),
+            retrieval_document_count=int(retrieval_status.get("document_count", 0)),
+            retrieval_model_loaded=bool(retrieval_status.get("model_loaded", False)),
+            retrieval_total_queries=int(retrieval_metrics.get("total_queries", 0)),
+            retrieval_hit_rate=round(float(retrieval_metrics.get("hit_rate", 0.0)) * 100, 2),
+            retrieval_avg_latency_ms=round(float(retrieval_metrics.get("avg_latency_ms", 0.0)), 2),
+            retrieval_empty_context_rate=round(float(retrieval_metrics.get("empty_context_rate", 0.0)) * 100, 2),
+            quality_total_evaluations=int(quality_metrics.get("total_evaluations", 0)),
+            quality_avg_grounding_score=round(float(quality_metrics.get("avg_grounding_score", 0.0)), 2),
+            quality_avg_citation_count=round(float(quality_metrics.get("avg_citation_count", 0.0)), 2),
+            quality_drift_alerts=int(quality_metrics.get("drift_alerts", 0)),
+            self_healing_running=bool(container.self_healing.get_status().get("is_running", False)),
+        )
+
     # ── Logs ──────────────────────────────────────────────────────────────
 
     @app.get("/logs", response_model=LogsResponse, tags=["logs"])
@@ -728,18 +899,67 @@ def _register_routes(app: FastAPI) -> None:
     async def parse_resume_file(
         request: Request,
         file: UploadFile = File(...),
+        authorization: Optional[str] = Header(None),
         _: dict = Depends(_require("execute")),
     ):
+        from uuid import uuid4
         container: AppContainer = request.app.state.container
         content = await file.read()
         try:
             parsed = container.career_service.parse_resume(file.filename or "resume.txt", content)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        doc_id = str(uuid4())
+        # Persist parsed fields to resume_analyses
+        if container.database_client.is_configured:
+            try:
+                container.database_client.save_resume_analysis({
+                    "id": doc_id,
+                    "title": parsed.filename,
+                    "source_filename": parsed.filename,
+                    "resume_text": parsed.text[:10000],
+                    "jd_text": "",
+                    "summary": parsed.parsed_fields.get("summary", "")[:2000],
+                    "match_score": 0,
+                    "suggestions": [],
+                    "ats_keywords": parsed.parsed_fields.get("skills", []),
+                    "strengths": [],
+                    "gaps": [],
+                    "recommended_roles": [],
+                    "parsed_fields": parsed.parsed_fields,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception:
+                pass
+
+        # Auto-index full text into vector store
+        try:
+            container.embedding_service.index_document(doc_id, "full-text", parsed.text[:4000])
+        except Exception:
+            pass
+
+        # If user is authenticated via JWT, update their profile with resume data
+        if authorization and authorization.startswith("Bearer "):
+            token = authorization.removeprefix("Bearer ").strip()
+            try:
+                from .jwt_utils import decode_access_token
+                from jose import JWTError
+                payload = decode_access_token(token)
+                user_id = payload.get("sub")
+                if user_id and container.database_client.is_configured:
+                    container.database_client.upsert_user_profile(
+                        user_id=user_id,
+                        resume_data=parsed.parsed_fields,
+                    )
+            except Exception:
+                pass
+
         return ResumeParseResponse(
             filename=parsed.filename,
             text=parsed.text,
             metadata=parsed.metadata,
+            parsed_fields=parsed.parsed_fields,
         )
 
     @app.post("/resume/analyze", response_model=ResumeAnalysisResponse, tags=["resume"])
@@ -956,6 +1176,25 @@ def _register_routes(app: FastAPI) -> None:
         )
         return ResumeReviewResponse(**result)
 
+    @app.post("/resume/cover-letter", response_model=CoverLetterResponse, tags=["resume"])
+    async def create_cover_letter(
+        request: Request,
+        body: CoverLetterRequest,
+        principal: dict = Depends(_require("execute")),
+    ):
+        container: AppContainer = request.app.state.container
+        result = container.career_service.create_cover_letter(
+            resume_text=body.resume_text,
+            jd_text=body.jd_text,
+            target_role=body.target_role,
+            company_name=body.company_name,
+            hiring_manager_name=body.hiring_manager_name,
+            tone=body.tone,
+            model_profile=body.model_profile,
+            created_by=principal.get("name"),
+        )
+        return CoverLetterResponse(**result)
+
     @app.post("/jobs/hunt", response_model=JobHuntResponse, tags=["jobs"])
     async def hunt_jobs(
         request: Request,
@@ -1007,6 +1246,23 @@ def _register_routes(app: FastAPI) -> None:
             medium_tier=[_to_live(j) for j in result["medium_tier"]],
             stretch_tier=[_to_live(j) for j in result["stretch_tier"]],
         )
+
+    @app.post("/job/recruiter-contacts", response_model=RecruiterContactResponse, tags=["jobs"])
+    async def recruiter_contacts(
+        request: Request,
+        body: RecruiterContactRequest,
+        principal: dict = Depends(_require("execute")),
+    ):
+        container: AppContainer = request.app.state.container
+        result = await container.career_service.discover_recruiter_contacts(
+            company_name=body.company_name,
+            company_domain=body.company_domain,
+            job_url=body.job_url,
+            source_text=body.source_text,
+            target_role=body.target_role,
+            created_by=principal.get("name"),
+        )
+        return RecruiterContactResponse(**result)
 
     @app.get("/tracker/analytics", response_model=CareerAnalyticsResponse, tags=["analytics"])
     async def tracker_analytics(

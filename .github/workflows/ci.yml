@@ -33,7 +33,8 @@ jobs:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/actypity_test
       AUTH_ENABLED: "false"
       DEBUG: "true"
-      SECRET_KEY: ci-test-secret
+      # Prefer setting CI_SECRET_KEY in GitHub Actions secrets. If not set, CI jobs may fail for some checks.
+      SECRET_KEY: ${{ secrets.CI_SECRET_KEY }}
 
     steps:
       - uses: actions/checkout@v4

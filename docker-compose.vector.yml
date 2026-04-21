@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  vector-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: uvicorn backend.vector_service:app --host 0.0.0.0 --port 8600
+    ports:
+      - "8600:8600"
+    volumes:
+      - ./:/app
+    restart: unless-stopped

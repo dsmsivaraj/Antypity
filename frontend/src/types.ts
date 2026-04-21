@@ -102,10 +102,28 @@ export interface Session {
   user: User
 }
 
+export interface ParsedFields {
+  name?: string | null
+  emails: string[]
+  phones: string[]
+  skills: string[]
+  education: string[]
+  summary: string
+  companies: string[]
+}
+
 export interface ResumeParseResponse {
   filename: string
   text: string
   metadata: Record<string, unknown>
+  parsed_fields?: ParsedFields | null
+}
+
+export interface UserProfile {
+  user_id: string
+  resume_data?: ParsedFields | null
+  preferences?: Record<string, unknown> | null
+  updated_at?: string | null
 }
 
 export interface ResumeAnalysis {
@@ -130,7 +148,32 @@ export interface ResumeChatResponse {
   used_llm: boolean
   provider: string
   model_profile: string
+  citations: Array<{
+    doc_id?: string | null
+    section_id?: string | null
+    excerpt?: string | null
+    score?: number | null
+    source_type?: string | null
+  }>
+  confidence: string
   suggested_questions: string[]
+}
+
+export interface CoverLetterResponse {
+  company_name: string
+  target_role: string
+  subject_line: string
+  cover_letter: string
+  talking_points: string[]
+  citations: Array<{
+    source_type?: string | null
+    excerpt?: string | null
+    matched_terms?: string[] | null
+  }>
+  confidence: string
+  used_llm: boolean
+  provider: string
+  model_profile: string
 }
 
 export interface ResumeTemplate {
@@ -169,6 +212,12 @@ export interface JobDescriptionResponse {
   source: string
   source_type: string
   keywords: string[]
+  citations: Array<{
+    source_type?: string | null
+    excerpt?: string | null
+    matched_terms?: string[] | null
+  }>
+  confidence: string
 }
 
 export interface JobSearchResult {
@@ -182,6 +231,27 @@ export interface JobSearchResult {
   ats_score?: number | null
 }
 
+export interface RecruiterContact {
+  name: string
+  title: string
+  email?: string | null
+  contact_url?: string | null
+  source: string
+  confidence: string
+  notes: string
+}
+
+export interface RecruiterContactResponse {
+  company_name: string
+  company_domain?: string | null
+  contacts: RecruiterContact[]
+  lookup_urls: string[]
+  verified_contact_count: number
+  inferred_contact_count: number
+  confidence: string
+  provenance: string[]
+}
+
 export interface CareerAnalytics {
   total_resume_analyses: number
   total_templates: number
@@ -189,6 +259,32 @@ export interface CareerAnalytics {
   total_job_results: number
   average_match_score: number
   top_sources: Record<string, number>
+  quality_total_evaluations: number
+  quality_avg_grounding_score: number
+  quality_avg_citation_count: number
+  quality_drift_alerts: number
+}
+
+export interface PlatformInsights {
+  registered_agents: number
+  model_profiles: number
+  local_model_profiles: number
+  metrics_rows: number
+  total_agent_executions: number
+  llm_execution_ratio: number
+  postgres_configured: boolean
+  retrieval_backend: string
+  retrieval_document_count: number
+  retrieval_model_loaded: boolean
+  retrieval_total_queries: number
+  retrieval_hit_rate: number
+  retrieval_avg_latency_ms: number
+  retrieval_empty_context_rate: number
+  quality_total_evaluations: number
+  quality_avg_grounding_score: number
+  quality_avg_citation_count: number
+  quality_drift_alerts: number
+  self_healing_running: boolean
 }
 
 export type DiagnosticIssue = {

@@ -2,9 +2,11 @@ import type { ChangeEvent, FormEvent } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import './App.css'
 import { api, getStoredApiKey, setStoredApiKey } from './api'
+import { useAuth } from './AuthContext'
 import { ChatPage } from './ChatPage'
-import { JobHuntPage } from './JobHuntPage'
 import { JobsPage } from './JobsPage'
+import { LoginPage } from './LoginPage'
+import { ProfilePage } from './ProfilePage'
 import { TemplatesPage } from './TemplatesPage'
 import type {
   AgentSummary,
@@ -18,17 +20,19 @@ import type {
   JobSearchResult,
   JobSource,
   ModelSummary,
+  PlatformInsights,
   ResumeAnalysis,
   ResumeChatResponse,
   ResumeTemplate,
   SelfHealingStatus,
 } from './types'
 
-type PageKey = 'overview' | 'resume' | 'jobs' | 'templates' | 'chat' | 'hunt'
+type PageKey = 'overview' | 'resume' | 'jobs' | 'templates' | 'chat' | 'login' | 'profile'
 
 const INITIAL_CONTEXT = '{\n  "priority": "normal",\n  "channel": "web"\n}'
 
 function App() {
+  const { user } = useAuth()
   const [page, setPage] = useState<PageKey>('overview')
   const [agents, setAgents] = useState<AgentSummary[]>([])
   const [models, setModels] = useState<ModelSummary[]>([])
@@ -37,6 +41,7 @@ function App() {
   const [authStatus, setAuthStatus] = useState<AuthStatusResponse | null>(null)
   const [selfHealing, setSelfHealing] = useState<SelfHealingStatus | null>(null)
   const [analytics, setAnalytics] = useState<CareerAnalytics | null>(null)
+  const [platformInsights, setPlatformInsights] = useState<PlatformInsights | null>(null)
   const [jobSources, setJobSources] = useState<JobSource[]>([])
   const [templates, setTemplates] = useState<ResumeTemplate[]>([])
   const [apiKey, setApiKey] = useState(() => getStoredApiKey())
@@ -93,6 +98,7 @@ function App() {
       historyResult,
       selfHealingResult,
       analyticsResult,
+      platformInsightsResult,
       diagResult,
       templateResult,
       sourceResult,
@@ -102,6 +108,7 @@ function App() {
       api.getExecutions(),
       api.getSelfHealingStatus().catch(() => null),
       api.getAnalytics().catch(() => null),
+      api.getPlatformInsights().catch(() => null),
       api.getLatestDiagnosticReport().catch(() => null),
       api.getResumeTemplates().catch(() => ({ templates: [] })),
       api.getJobSources().catch(() => ({ sources: [] })),
@@ -111,6 +118,7 @@ function App() {
     setHistory(historyResult.executions)
     setSelfHealing(selfHealingResult)
     setAnalytics(analyticsResult)
+    setPlatformInsights(platformInsightsResult)
     setDiagnostics(diagResult)
     setTemplates(templateResult.templates)
     setJobSources(sourceResult.sources)
@@ -357,9 +365,32 @@ function App() {
   return (
     <div className="app-page">
       <nav className="navbar navbar-expand-lg border-bottom bg-white bg-opacity-75 sticky-top">
-        <div className="container py-2">
-          <span className="navbar-brand fw-semibold mb-0 h1">Antypity</span>
-          <span className="badge rounded-pill text-bg-primary">Career OS</span>
+        <div className="container py-2 d-flex align-items-center justify-content-between">
+          <div className="d-flex align-items-center gap-2">
+            <span className="navbar-brand fw-semibold mb-0 h1">Actypity</span>
+            <span className="badge rounded-pill text-bg-primary">Career OS</span>
+          </div>
+          <div className="d-flex align-items-center gap-2">
+            {user ? (
+              <>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${page === 'profile' ? 'btn-primary' : 'btn-outline-secondary'}`}
+                  onClick={() => setPage('profile')}
+                >
+                  {user.full_name ?? user.email}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                onClick={() => setPage('login')}
+              >
+                Sign In
+              </button>
+            )}
+          </div>
         </div>
       </nav>
 
@@ -375,11 +406,11 @@ function App() {
               </p>
             </div>
             <div className="col-lg-5">
-              <div className="row g-3">
+                <div className="row g-3">
                 <StatusTile label="API endpoint" value={api.baseUrl} />
                 <StatusTile label="Health" value={health?.status ?? 'unknown'} />
                 <StatusTile label="Local models" value={localModels.length ? `${localModels.length} available` : 'not configured'} />
-                <StatusTile label="Templates" value={templates.length ? `${templates.length} loaded` : 'none'} />
+                <StatusTile label="Retrieval" value={platformInsights ? `${platformInsights.retrieval_backend} · ${platformInsights.retrieval_document_count} docs · ${platformInsights.retrieval_hit_rate}% hit` : 'unknown'} />
               </div>
             </div>
           </div>
@@ -475,14 +506,14 @@ function App() {
               <div className="card-body p-4">
                 <div className="text-uppercase small text-secondary fw-semibold mb-2">Navigation</div>
                 <div className="d-flex flex-wrap gap-2">
-                  {[
+                  {([
                     ['overview', 'Overview'],
                     ['resume', 'Resume Lab'],
-                    ['hunt', '🎯 AI Job Hunt'],
                     ['chat', 'Career Chat'],
                     ['jobs', 'Job Discovery'],
                     ['templates', 'Template Studio'],
-                  ].map(([value, label]) => (
+                    ...(user ? [['profile', 'My Profile']] : [['login', 'Sign In']]),
+                  ] as [string, string][]).map(([value, label]) => (
                     <button
                       key={value}
                       type="button"
@@ -498,6 +529,12 @@ function App() {
                   <MetricCard label="Job queries" value={String(analytics?.total_job_queries ?? 0)} />
                   <MetricCard label="Job results" value={String(analytics?.total_job_results ?? 0)} />
                   <MetricCard label="Avg match score" value={`${analytics?.average_match_score ?? 0}%`} />
+                  <MetricCard label="Agent executions" value={String(platformInsights?.total_agent_executions ?? 0)} />
+                  <MetricCard label="LLM usage" value={`${platformInsights?.llm_execution_ratio ?? 0}%`} />
+                  <MetricCard label="Retrieval queries" value={String(platformInsights?.retrieval_total_queries ?? 0)} />
+                  <MetricCard label="Retrieval hit rate" value={`${platformInsights?.retrieval_hit_rate ?? 0}%`} />
+                  <MetricCard label="Grounding score" value={`${platformInsights?.quality_avg_grounding_score ?? 0}%`} />
+                  <MetricCard label="Drift alerts" value={String(platformInsights?.quality_drift_alerts ?? 0)} />
                 </div>
               </div>
             </div>
@@ -508,6 +545,7 @@ function App() {
           <OverviewPage
             agents={agents}
             models={models}
+            platformInsights={platformInsights}
             selectedAgent={selectedAgent}
             task={task}
             setTask={setTask}
@@ -550,10 +588,9 @@ function App() {
 
         {page === 'chat' ? <ChatPage /> : null}
 
-        {page === 'hunt' ? <JobHuntPage resumeText={resumeText} /> : null}
-
         {page === 'jobs' ? (
           <JobsPage
+            resumeText={resumeText}
             jobExtractUrl={jobExtractUrl}
             setJobExtractUrl={setJobExtractUrl}
             jdText={jdText}
@@ -588,7 +625,17 @@ function App() {
             loading={loading}
           />
         ) : null}
+
+        {page === 'profile' ? (
+          <ProfilePage onNavigateToResume={() => setPage('resume')} />
+        ) : null}
       </div>
+
+      {page === 'login' ? (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 9999 }}>
+          <LoginPage onLoginSuccess={() => setPage('overview')} />
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -596,6 +643,7 @@ function App() {
 function OverviewPage(props: {
   agents: AgentSummary[]
   models: ModelSummary[]
+  platformInsights: PlatformInsights | null
   selectedAgent: AgentSummary | null
   task: string
   setTask: (value: string) => void
@@ -735,6 +783,19 @@ function OverviewPage(props: {
       <div className="col-12">
         <div className="card glass-card border-0 rounded-4">
           <div className="card-body p-4">
+            <div className="text-uppercase small text-secondary fw-semibold">Platform posture</div>
+            <h2 className="section-title h4 mb-3">Operational insights</h2>
+            <div className="row g-3 mb-4">
+              <MetricCard label="Registered agents" value={String(props.platformInsights?.registered_agents ?? props.agents.length)} />
+              <MetricCard label="Model profiles" value={String(props.platformInsights?.model_profiles ?? props.models.length)} />
+              <MetricCard label="Retrieval docs" value={String(props.platformInsights?.retrieval_document_count ?? 0)} />
+              <MetricCard label="Self-healing" value={props.platformInsights?.self_healing_running ? 'Running' : 'Idle'} />
+              <MetricCard label="Avg retrieval latency" value={`${props.platformInsights?.retrieval_avg_latency_ms ?? 0} ms`} />
+              <MetricCard label="Empty-context rate" value={`${props.platformInsights?.retrieval_empty_context_rate ?? 0}%`} />
+              <MetricCard label="Quality evals" value={String(props.platformInsights?.quality_total_evaluations ?? 0)} />
+              <MetricCard label="Avg citations" value={String(props.platformInsights?.quality_avg_citation_count ?? 0)} />
+            </div>
+
             <div className="d-flex justify-content-between align-items-center mb-3">
               <div>
                 <div className="text-uppercase small text-secondary fw-semibold">Diagnostics</div>
@@ -930,8 +991,27 @@ function ResumePage(props: {
                 <div className="d-flex flex-wrap gap-2 mb-2">
                   <span className="badge text-bg-light border">{props.resumeChat.model_profile}</span>
                   <span className="badge text-bg-light border">{props.resumeChat.provider}</span>
+                  <span className="badge text-bg-light border">Confidence {props.resumeChat.confidence}</span>
                 </div>
                 <div className="border rounded-4 p-3 bg-body-tertiary">{props.resumeChat.answer}</div>
+                {props.resumeChat.citations.length ? (
+                  <div className="mt-3">
+                    <div className="small text-secondary text-uppercase fw-semibold mb-2">Citations</div>
+                    <div className="d-grid gap-2">
+                      {props.resumeChat.citations.map((citation, index) => (
+                        <div key={`${citation.doc_id}-${citation.section_id}-${index}`} className="border rounded-4 p-3 bg-white">
+                          <div className="small fw-semibold mb-1">
+                            {citation.source_type ?? 'source'} · {citation.doc_id ?? 'doc'} / {citation.section_id ?? 'section'}
+                          </div>
+                          <div className="small text-secondary mb-1">
+                            Score {typeof citation.score === 'number' ? citation.score.toFixed(3) : 'n/a'}
+                          </div>
+                          <div className="small">{citation.excerpt}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 <div className="mt-3">
                   <div className="small text-secondary text-uppercase fw-semibold mb-2">Suggested follow-ups</div>
                   <div className="d-flex flex-wrap gap-2">

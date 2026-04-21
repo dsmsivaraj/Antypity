@@ -51,10 +51,12 @@ class AuthService:
         db: PostgreSQLDatabaseClient,
         config_enabled: bool = True,
         default_admin_key: Optional[str] = None,
+        google_client_id: Optional[str] = None,
     ) -> None:
         self.db = db
         self._default_admin_key = default_admin_key
         self._default_admin_hash = hash_key(default_admin_key) if default_admin_key else None
+        self.google_client_id = google_client_id
         # Auth only works when the database is reachable; disable silently otherwise.
         self.enabled = config_enabled and db.is_configured
         if config_enabled and not db.is_configured:
@@ -115,6 +117,26 @@ class AuthService:
             _logger.info("Seeded default admin API key (name='%s').", name)
         except Exception as exc:
             _logger.error("Failed to seed default admin key: %s", exc)
+
+    def verify_google_id_token(self, id_token: str) -> Dict:
+        """Verify a Google ID token and return {email, full_name, social_id}."""
+        if not self.google_client_id:
+            raise ValueError("Google Sign-In is not configured (GOOGLE_CLIENT_ID not set).")
+        try:
+            from google.oauth2 import id_token as google_id_token
+            from google.auth.transport import requests as grequests
+            idinfo = google_id_token.verify_oauth2_token(
+                id_token, grequests.Request(), self.google_client_id
+            )
+        except Exception as exc:
+            raise ValueError(f"Invalid Google ID token: {exc}") from exc
+        if idinfo.get("iss") not in ("accounts.google.com", "https://accounts.google.com"):
+            raise ValueError("Token issuer is not Google.")
+        return {
+            "email": idinfo["email"],
+            "full_name": idinfo.get("name", ""),
+            "social_id": idinfo["sub"],
+        }
 
     def bootstrap_admin(self, provided_token: str, configured_token: Optional[str], name: str) -> Dict:
         if not self.enabled:

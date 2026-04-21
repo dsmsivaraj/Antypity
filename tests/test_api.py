@@ -155,12 +155,26 @@ class TestMetricsRoute:
         assert resp.status_code == 200
         assert "metrics" in resp.json()
 
+    def test_platform_insights_endpoint(self, client: TestClient):
+        resp = client.get("/platform/insights")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "registered_agents" in data
+        assert "retrieval_backend" in data
+        assert "llm_execution_ratio" in data
+        assert "retrieval_total_queries" in data
+        assert "retrieval_hit_rate" in data
+        assert "quality_avg_grounding_score" in data
+        assert "quality_drift_alerts" in data
+
     def test_tracker_analytics_endpoint(self, client: TestClient):
         resp = client.get("/tracker/analytics")
         assert resp.status_code == 200
         data = resp.json()
         assert "total_resume_analyses" in data
         assert "average_match_score" in data
+        assert "quality_total_evaluations" in data
+        assert "quality_avg_grounding_score" in data
 
 
 class TestLogsRoute:
@@ -238,6 +252,27 @@ class TestCareerRoutes:
         data = resp.json()
         assert "answer" in data
         assert "suggested_questions" in data
+        assert "citations" in data
+        assert "confidence" in data
+
+    def test_cover_letter(self, client: TestClient):
+        resp = client.post(
+            "/resume/cover-letter",
+            json={
+                "resume_text": "Built React, FastAPI, and GenAI workflow systems with measurable product impact.",
+                "jd_text": "Looking for a senior engineer with React, Python, FastAPI, and AI product experience.",
+                "target_role": "Senior GenAI Engineer",
+                "company_name": "Acme AI",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["company_name"] == "Acme AI"
+        assert "subject_line" in data
+        assert "cover_letter" in data
+        assert "talking_points" in data
+        assert "citations" in data
+        assert "confidence" in data
 
     def test_job_sources(self, client: TestClient):
         resp = client.get("/job/sources")
@@ -254,6 +289,8 @@ class TestCareerRoutes:
         data = resp.json()
         assert data["source_type"] == "manual"
         assert "keywords" in data
+        assert "citations" in data
+        assert "confidence" in data
 
     def test_job_search(self, client: TestClient):
         resp = client.post(
@@ -265,6 +302,26 @@ class TestCareerRoutes:
         assert isinstance(data, list)
         assert len(data) == 2
         assert data[0]["source"] in {"linkedin", "indeed"}
+
+    def test_recruiter_contacts_from_text(self, client: TestClient):
+        resp = client.post(
+            "/job/recruiter-contacts",
+            json={
+                "company_name": "Acme AI",
+                "source_text": "For questions contact talent@acme.ai or recruiting@acme.ai.",
+                "target_role": "Senior GenAI Engineer",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["company_name"] == "Acme AI"
+        assert len(data["contacts"]) >= 1
+        assert any(contact["email"] == "talent@acme.ai" for contact in data["contacts"])
+        assert len(data["lookup_urls"]) >= 1
+        assert "verified_contact_count" in data
+        assert "inferred_contact_count" in data
+        assert "confidence" in data
+        assert "provenance" in data
 
     def test_resume_templates_list(self, client: TestClient):
         resp = client.get("/resume/templates")
