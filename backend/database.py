@@ -194,6 +194,7 @@ class PostgreSQLDatabaseClient:
             _str("url", nullable=False),
             Column("source", String, nullable=True),
             Column("location", String, nullable=True),
+            Column("summary", String, nullable=True),
             Column("embedding", JSON, nullable=True),
             Column("created_at", DateTime(timezone=True), nullable=False),
         )
@@ -214,6 +215,8 @@ class PostgreSQLDatabaseClient:
             Column("gaps", JSON, nullable=False),
             Column("recommended_roles", JSON, nullable=False),
             Column("model_profile", String, nullable=True),
+            Column("used_llm", Boolean, nullable=True),
+            Column("provider", String, nullable=True),
             Column("created_by", String, nullable=True),
             Column("created_at", DateTime(timezone=True), nullable=False),
         )
