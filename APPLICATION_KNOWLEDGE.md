@@ -12,6 +12,51 @@ Actypity is a production-ready base for agent-enabled applications with:
 
 This document is the current architecture reference for maintaining and extending the codebase safely.
 
+## Self-Healing Microservices Architecture
+
+The platform includes an autonomous self-healing system distributed across three microservices:
+
+### 1. Diagnostic Service (`services/diagnostics/`)
+- **Agents**: `HealthCheckAgent`, `TestRunnerAgent`, `CodeAnalyzerAgent`, `DiagnosticsReporterAgent`.
+- **Function**: Monitors system health, runs tests, and performs static code analysis.
+- **API**: Exposes internal endpoints for triggering specific diagnostic tasks and generating aggregated reports.
+
+### 2. Repair Service (`services/repair/`)
+- **Agents**: `SelfHealingAgent`, `BugFixAgent`.
+- **Function**: Executes autonomous repairs.
+  - `SelfHealingAgent` handles platform-level recoveries like service restarts.
+  - `BugFixAgent` uses LLMs to analyze and repair code bugs/failing tests.
+- **API**: Exposes internal endpoints for service-level and code-level repairs.
+
+### 3. Orchestrator Service (`services/orchestrator/`)
+- **Function**: The central control loop ("Monitor → Analyze → Repair → Verify").
+- **Behavior**: Periodically triggers diagnostics, analyzes findings, delegates repairs to the Repair Service, and verifies the outcome.
+- **API**: Exposes a public-facing status endpoint and an internal trigger endpoint.
+
+## Applicant Tracking System (ATS) Architecture
+
+The platform features a production-grade ATS built on a distributed microservice model:
+
+### 1. Identity Service (`services/identity/`)
+- **Responsibilities**: Social authentication (Google, Facebook, etc.), user management, and JWT session handling.
+- **Persistence**: Manages `users`, `user_sessions`, and `user_profiles` in PostgreSQL.
+
+### 2. Resume Processor (`services/resume_processor/`)
+- **Responsibilities**: Parsing PDF and Word resumes, extracting metadata, and providing content optimization suggestions via LLM agents.
+
+### 3. Job Scraper (`services/job_scraper/`)
+- **Responsibilities**: Extracting Job Descriptions (JDs) from portal links (LinkedIn, Naukri, etc.) and searching for profile-matched jobs across portals.
+
+### 4. ATS Matcher (`services/ats-matcher/`)
+- **Responsibilities**: Scoring resumes against JDs using multi-model orchestration, identifying missing keywords, and providing improvement summaries.
+
+### 5. Outreach & Tracker (`services/outreach/`, `services/tracker/`)
+- **Responsibilities**: Generating tailored cover letters, finding recruiter contacts, and persisting application statuses in a Kanban-style tracker.
+
+### Inter-Service Communication
+- Services communicate via internal HTTP APIs secured by `X-Internal-Token`.
+- The main backend acts as a gateway proxy for the self-healing status UI.
+
 ## Current Architecture
 
 ### Backend
@@ -158,6 +203,11 @@ When ports change, update:
 - deployment manifests
 
 ## PostgreSQL Persistence Map
+
+### Local setup (Recommended)
+- `APP_STORAGE_BACKEND=postgres`
+- `DATABASE_URL=postgresql+psycopg://localhost:5432/actypity`
+
 
 Persisted entities and their tables:
 
@@ -348,3 +398,7 @@ Live workflow validated:
 - Ran full test suite: 99 passed.
 - Fixed missing Postgres driver by adding psycopg2-binary to backend/requirements.txt.
 - Verified pytest passes locally.
+
+## LLaMA Resume Assistant (2026-04-21)
+- Optional local LLaMA support via llama-cpp-python
+- Test with: LLAMA_MODEL_PATH=/path/to/model.ggml python scripts/test_llama_inference.py

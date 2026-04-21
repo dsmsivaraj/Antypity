@@ -1,0 +1,5 @@
+# Optional dependencies for local LLaMA-based resume processing
+llama-cpp-python==0.1.77
+pdfminer.six==20221105
+python-docx==0.8.11
+# Install with: pip install -r backend/requirements-llama.txt

@@ -87,6 +87,10 @@ Engineering standard:
   - frontend types and rendering paths
 
 ### 8. Bug fixing discipline
+### Local service management
+- Always use `pkill -f` to clear stale backend processes if port 8000/8001 is "already in use"
+- Preferred backend port for local development: `9500` (to avoid conflicts with Jupyter or common system services)
+
 
 - Read the failing layer first: identify whether the bug is in routing, schema, storage, LLM, or frontend
 - Verify with compile check, lint, or smoke test after every fix — not just visual inspection
@@ -94,6 +98,24 @@ Engineering standard:
 - Check both local and Docker behavior for environment-related bugs
 
 ---
+
+### 9. Self-Healing and Microservice Orchestration
+
+- **Distributed Diagnostics**: Understand the separation of monitoring (Diagnostics Service) from action (Repair Service).
+- **Control Loop Design**: The `SelfHealingController` manages the state machine (Monitor → Analyze → Repair → Verify).
+- **Inter-Service Authentication**: Use `X-Internal-Token` for all service-to-service calls.
+- **Service Recovery**: Implement atomic repair skills in `SelfHealingAgent` using subprocess or Docker APIs.
+- **LLM Code Repair**: Leverage `BugFixAgent` with high-tier model profiles for autonomous code patches.
+- **Observability**: Monitor the `history` and `last_cycle` of the orchestrator to assess healing success rates.
+
+### 10. Production-Grade ATS Engineering
+
+- **Social Identity Management**: Implement social auth flows (Google, Facebook) and manage user sessions/RBAC in PostgreSQL.
+- **Document Processing**: Use `pypdf` and `python-docx` for reliable metadata and text extraction from applicant resumes.
+- **Intelligent JD Extraction**: Implement BeautifulSoup and Playwright-based scraping for dynamic job portal parsing.
+- **ATS Scoring Algorithms**: Design multi-model scoring loops (e.g., using GPT-4o) to rank candidates against specific JD keywords.
+- **Automated Outreach**: Integrate with Gmail/SendGrid APIs for professional recruiter communication and cover letter generation.
+- **Persistence & Tracking**: Manage application state machines (applied -> screening -> interview) in a distributed environment.
 
 ## Bug-Fix Playbooks
 
@@ -318,3 +340,6 @@ As the platform grows, add specialized skills for:
 ### Updated skills notes (2026-04-20)
 - Added dependency management note: psycopg2-binary required for local Postgres integration tests.
 - Recommend running 'pip install -r backend/requirements.txt' after environment setup.
+
+## LLaMA Resume Assistant (2026-04-21)
+- Add backend/llama_client.py and agents/llama_resume_agent.py to provide local resume summarization.
