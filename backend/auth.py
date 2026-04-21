@@ -46,8 +46,15 @@ def generate_key() -> str:
 
 
 class AuthService:
-    def __init__(self, db: PostgreSQLDatabaseClient, config_enabled: bool = True) -> None:
+    def __init__(
+        self,
+        db: PostgreSQLDatabaseClient,
+        config_enabled: bool = True,
+        default_admin_key: Optional[str] = None,
+    ) -> None:
         self.db = db
+        self._default_admin_key = default_admin_key
+        self._default_admin_hash = hash_key(default_admin_key) if default_admin_key else None
         # Auth only works when the database is reachable; disable silently otherwise.
         self.enabled = config_enabled and db.is_configured
         if config_enabled and not db.is_configured:
@@ -59,6 +66,9 @@ class AuthService:
     def validate_key(self, raw_key: str) -> Optional[Dict]:
         if not self.enabled:
             return {"id": "anonymous", "name": "anonymous", "role": "admin"}
+        # DEFAULT_ADMIN_KEY always works without a DB round-trip
+        if self._default_admin_key and raw_key == self._default_admin_key:
+            return {"id": "default-admin", "name": "default-admin", "role": "admin"}
         try:
             return self.db.get_api_key_by_hash(hash_key(raw_key))
         except Exception as exc:
@@ -67,6 +77,9 @@ class AuthService:
 
     def bootstrap_required(self) -> bool:
         if not self.enabled:
+            return False
+        # If a default admin key is configured, the system is never in bootstrap-only mode
+        if self._default_admin_key:
             return False
         try:
             return not self.db.has_any_api_key()

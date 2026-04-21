@@ -2,12 +2,21 @@
 
 set -euo pipefail
 
-export PYTHONPATH="$(pwd)"
+# Get project root directory
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$PROJECT_ROOT"
+
+# Activate venv
 source backend/venv/bin/activate
 
-echo "Virtual environment activated and PYTHONPATH set to $PYTHONPATH"
+# Set PYTHONPATH to project root
+export PYTHONPATH="$PROJECT_ROOT"
 
+echo "Virtual environment activated"
+echo "PYTHONPATH set to: $PYTHONPATH"
+
+# Update pip and install requirements
 pip install --upgrade pip
 pip install -r backend/requirements.txt
 
-echo "Virtual environment updated"
+echo "Virtual environment updated with latest dependencies"

@@ -1,180 +1,115 @@
 # Application Workflow
 
-## Overview
+## 1. Platform bootstrap
 
-This document describes the validated runtime workflow of the Actypity application as of `2026-04-20`.
+1. Start PostgreSQL, or point `DATABASE_URL` to an existing instance.
+2. Start the backend with [run_backend.sh](/Users/kdn_aisivarajm/Actypity/run_backend.sh:1).
+3. Start the frontend with `npm run dev` in `frontend/`.
+4. Frontend loads:
+   - `GET /health`
+   - `GET /auth/status`
+5. If bootstrap is required, create the first admin key through `POST /auth/bootstrap`.
+6. Frontend stores the returned API key and loads protected data.
 
-## First-Run Authentication Workflow
+## 2. Overview workflow
 
-### Preconditions
+1. Frontend loads:
+   - `GET /agents`
+   - `GET /models`
+   - `GET /executions`
+   - `GET /tracker/analytics`
+   - `GET /diagnostics/reports/latest`
+2. User submits a task through `POST /execute`.
+3. Backend orchestrator selects an agent through internal scoring APIs.
+4. Selected agent executes through internal execution APIs.
+5. Execution, metrics, and logs are stored in PostgreSQL.
+6. Frontend refreshes recent execution history.
 
-- `AUTH_ENABLED=true`
-- `APP_STORAGE_BACKEND=postgres`
-- PostgreSQL is reachable
-- no API keys exist yet
+## 3. Resume lab workflow
 
-### Flow
+1. User uploads a resume file through `POST /resume/parse`.
+2. Backend parses the file locally using `pypdf`, `python-docx`, or plain text decoding.
+3. Frontend sends parsed text and optional JD text to `POST /resume/analyze`.
+4. Backend computes:
+   - ATS keywords
+   - strengths
+   - gaps
+   - match score
+   - suggested roles
+   - LLM summary via local LLaMA, Azure OpenAI, or fallback
+5. Analysis is persisted into `resume_analyses`.
+6. User can ask follow-up questions through `POST /resume/chat`.
 
-1. frontend loads `GET /health`
-2. frontend loads `GET /auth/status`
-3. backend reports `bootstrap_required=true`
-4. frontend shows the bootstrap form
-5. user submits `POST /auth/bootstrap` with:
-   - `X-Bootstrap-Token`
-   - `{ "name": "<admin key name>" }`
-6. backend creates the first admin API key
-7. frontend stores the returned raw API key locally
-8. frontend reloads protected data with `X-API-Key`
+## 4. Job discovery workflow
 
-### Result
+1. User either:
+   - pastes raw JD text, or
+   - submits a trusted portal URL to `POST /job/extract`
+2. Backend accepts only allowlisted portal hosts or manual text.
+3. Frontend can then generate trusted source search links via `POST /job/search`.
+4. Job query metadata is stored in `career_queries`.
+5. Search results are stored in `job_search_results`.
 
-The app becomes usable without any manual database edits.
+## 5. Template studio workflow
 
-## Standard Authenticated UI Workflow
+1. Frontend loads `GET /resume/templates`.
+2. User submits a new design brief through `POST /resume/templates/design`.
+3. Backend generates:
+   - recommended sections
+   - design tokens
+   - a Figma-ready creative brief
+   - markdown preview text
+4. Template records are stored in `resume_templates`.
+5. Frontend refreshes the template catalog.
 
-1. frontend resolves the backend base URL in `frontend/src/api.ts`
-2. frontend reads the stored API key from local storage
-3. protected API calls automatically attach `X-API-Key`
-4. on success, the UI loads:
-   - agents
-   - models
-   - execution history
-   - auth-aware status cards
+## 6. Chatbot workflow
 
-If the API key is missing or invalid:
+1. User asks a general resume or career question via `POST /chat` or `POST /resume/chat`.
+2. Chat context can include:
+   - `resume_text`
+   - `jd_text`
+   - `session_id`
+3. The chatbot uses Ollama first, Azure fallback second.
+4. Session history is tracked in the in-memory `ChatStore`.
 
-- protected endpoints return `401`
-- the UI stays on the auth panel until a valid key is loaded
+## 7. Local model workflow
 
-## Task Execution Workflow
+### `llama-cpp-python`
 
-### Request path
+1. Configure one or more `LLAMA_*_MODEL_PATH` variables.
+2. Backend exposes local profiles through `GET /models`.
+3. `CareerService` prefers local profiles for resume, JD, and template workloads.
 
-1. user submits a task from the frontend
-2. frontend calls `POST /execute`
-3. backend validates auth and RBAC
-4. orchestrator resolves the target agent through internal scoring APIs
-5. selected agent executes through an internal execution API
-6. model-backed agents call the internal model completion API
-7. execution is persisted
-8. metrics are updated
-9. logs are written
-10. response is returned to the frontend
+### Ollama
 
-### Persisted records
+1. Start `ollama serve`.
+2. Pull a model such as `ollama pull llama3`.
+3. Backend health for local inference is visible through `GET /ollama/status`.
+4. Ollama-backed agents become effective when the local runtime is reachable.
 
-- `executions`
-- `agent_metrics`
-- `execution_logs`
+## 8. Validation workflow
 
-## Workflow Definition And Execution Flow
+Recommended command sequence:
 
-### Workflow definition
+1. `./backend/venv/bin/python -m py_compile backend/*.py agents/*.py shared/*.py tests/*.py`
+2. `cd frontend && npm run lint`
+3. `cd frontend && npm run build`
+4. `./backend/venv/bin/pytest tests/test_api.py -q`
+5. `./backend/venv/bin/pytest tests/test_auth.py tests/test_storage.py tests/test_agents.py tests/test_workflow.py tests/test_orchestrator.py tests/test_diagnostics.py -q`
+6. `./backend/venv/bin/pytest tests/test_postgres_integration.py -q`
 
-1. user or API client calls `POST /workflows/definitions`
-2. backend stores:
-   - workflow name
-   - description
-   - ordered steps
-   - creator
+PostgreSQL integration tests now skip cleanly when the configured `DATABASE_URL` is not reachable.
 
-### Workflow execution
+## 9. Production note
 
-1. client calls `POST /workflows/execute`
-2. backend loads the workflow definition from PostgreSQL
-3. backend creates a workflow execution record
-4. workflow executor runs each step through the orchestrator
-5. each step creates its own execution row and metrics/logs
-6. backend updates the workflow execution record with results
+The current system of record is PostgreSQL for:
 
-### Persisted records
-
-- `workflow_definitions`
-- `workflow_executions`
-- per-step `executions`
-- `agent_metrics`
-- `execution_logs`
-
-## Agent Registry Workflow
-
-1. container builds the agent registry in memory
-2. startup sync writes registry metadata to PostgreSQL
-3. `GET /agents` reads from PostgreSQL when available
-4. if registry sync/read fails, the API can fall back to the in-memory registry listing
-
-## Model Registry Workflow
-
-1. container builds model profiles from environment-aware settings
-2. `GET /models` exposes the catalog publicly
-3. internal model execution uses `/internal/models/complete`
-4. agents can prefer specific model profiles
-
-## Logging Workflow
-
-1. app startup configures logging through `backend/log_handler.py`
-2. application and orchestration events emit standard log records
-3. log handler persists records into PostgreSQL
-4. `GET /logs` returns recent log entries
-5. `execution_id` query filtering allows targeted investigation
-
-## Metrics Workflow
-
-1. orchestrator records execution outcomes by agent
-2. metrics service writes aggregated counters to PostgreSQL
-3. `GET /metrics` returns persisted metrics
-
-Tracked values include:
-
-- total executions
-- LLM executions
-- failed executions
-- last execution time
-
-## Environment Workflow
-
-### Local PostgreSQL
-
-Current validated local configuration:
-
-```env
-APP_STORAGE_BACKEND=postgres
-DATABASE_URL=postgresql+psycopg:///actypity?host=/tmp&user=kdn_aisivarajm
-```
-
-### Cloud PostgreSQL
-
-Supported production pattern:
-
-```env
-APP_STORAGE_BACKEND=postgres
-DATABASE_URL=postgresql+psycopg://user:password@host:5432/database?sslmode=require
-```
-
-## Validation Workflow
-
-The current recommended validation sequence is:
-
-1. compile backend Python files
-2. run frontend lint
-3. run frontend production build
-4. run backend unit and API tests
-5. run PostgreSQL integration tests
-6. run a live protected smoke workflow:
-   - `/health`
-   - `/auth/status`
-   - `/auth/bootstrap`
-   - `/models`
-   - `/agents`
-   - `/execute`
-   - `/workflows/definitions`
-   - `/workflows/execute`
-   - `/metrics`
-   - `/logs`
-   - `/executions`
-   - `/workflows/executions`
-
-## Operational Notes
-
-- the first bootstrap-created admin key is shown only once
-- if LLM config is missing, execution still succeeds in deterministic fallback mode
-- PostgreSQL is the system of record for auth, logs, metrics, registry, workflow definitions, and workflow runs
+- auth
+- logs
+- metrics
+- agent registry
+- workflows
+- execution history
+- resume analyses
+- template designs
+- job query records

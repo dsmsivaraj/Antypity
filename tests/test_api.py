@@ -36,12 +36,16 @@ class TestAgentRoutes:
         assert resp.status_code == 200
         agents = resp.json()
         assert isinstance(agents, list)
-        assert len(agents) == 4
+        assert len(agents) >= 4
         names = {a["name"] for a in agents}
         assert "generalist" in names
         assert "planner" in names
         assert "reviewer" in names
         assert "math" in names
+        assert "health-monitor" in names
+        assert "test-runner" in names
+        assert "code-analyzer" in names
+        assert "diagnostics-reporter" in names
 
     def test_agent_has_required_fields(self, client: TestClient):
         resp = client.get("/agents")
@@ -60,6 +64,11 @@ class TestModelRoutes:
         assert "models" in data
         assert len(data["models"]) >= 1
         assert "id" in data["models"][0]
+
+    def test_list_models_includes_fallback_profiles(self, client: TestClient):
+        resp = client.get("/models")
+        ids = {item["id"] for item in resp.json()["models"]}
+        assert "fallback-fast" in ids
 
 
 class TestExecuteRoute:
@@ -146,6 +155,13 @@ class TestMetricsRoute:
         assert resp.status_code == 200
         assert "metrics" in resp.json()
 
+    def test_tracker_analytics_endpoint(self, client: TestClient):
+        resp = client.get("/tracker/analytics")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "total_resume_analyses" in data
+        assert "average_match_score" in data
+
 
 class TestLogsRoute:
     def test_logs_endpoint(self, client: TestClient):
@@ -192,3 +208,82 @@ class TestWorkflowRoutes:
         resp = client.get("/workflows/executions")
         assert resp.status_code == 200
         assert resp.json()["executions"] == []
+
+
+class TestCareerRoutes:
+    def test_resume_analyze(self, client: TestClient):
+        resp = client.post(
+            "/resume/analyze",
+            json={
+                "text": "Senior frontend engineer building React and FastAPI systems with Docker.",
+                "jd_text": "We need React, FastAPI, Docker, and TypeScript experience.",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "summary" in data
+        assert "ats_keywords" in data
+        assert isinstance(data["match_score"], int)
+
+    def test_resume_chat(self, client: TestClient):
+        resp = client.post(
+            "/resume/chat",
+            json={
+                "question": "What are the main strengths?",
+                "resume_text": "Built React apps and FastAPI APIs with Docker.",
+                "jd_text": "React and FastAPI experience required.",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "answer" in data
+        assert "suggested_questions" in data
+
+    def test_job_sources(self, client: TestClient):
+        resp = client.get("/job/sources")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "sources" in data
+
+    def test_job_extract_from_text(self, client: TestClient):
+        resp = client.post(
+            "/job/extract",
+            json={"text": "Senior Backend Engineer. Build APIs with Python, FastAPI, PostgreSQL, and Docker."},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["source_type"] == "manual"
+        assert "keywords" in data
+
+    def test_job_search(self, client: TestClient):
+        resp = client.post(
+            "/job/search",
+            json={"keywords": ["react", "fastapi"], "locations": ["Remote"], "sources": ["linkedin", "indeed"]},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert len(data) == 2
+        assert data[0]["source"] in {"linkedin", "indeed"}
+
+    def test_resume_templates_list(self, client: TestClient):
+        resp = client.get("/resume/templates")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "templates" in data
+        assert len(data["templates"]) >= 1
+
+    def test_resume_template_design(self, client: TestClient):
+        resp = client.post(
+            "/resume/templates/design",
+            json={
+                "name": "Modern AI Engineer",
+                "target_role": "Senior GenAI Engineer",
+                "style": "bold editorial",
+                "notes": "Keep it recruiter-friendly and one page.",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "Modern AI Engineer"
+        assert "figma_prompt" in data
