@@ -1,0 +1,244 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: actypity
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d actypity"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 9500
+    ports:
+      - "9500:9500"
+    environment:
+      - APP_STORAGE_BACKEND=postgres
+      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - API_PORT=9500
+      - INTERNAL_API_TOKEN=your-internal-token
+      - ORCHESTRATOR_SERVICE_URL=http://orchestrator:9503
+      - IDENTITY_SERVICE_URL=http://identity:9504
+      - CHATBOT_SERVICE_URL=http://chatbot:9512
+      - TEMPLATE_SERVICE_URL=http://templates:9513
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  diagnostics:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: uvicorn services.diagnostics.main:app --host 0.0.0.0 --port 9501
+    ports:
+      - "9501:9501"
+    environment:
+      - APP_STORAGE_BACKEND=postgres
+      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - INTERNAL_API_TOKEN=your-internal-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  repair:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: uvicorn services.repair.main:app --host 0.0.0.0 --port 9502
+    ports:
+      - "9502:9502"
+    environment:
+      - APP_STORAGE_BACKEND=postgres
+      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - INTERNAL_API_TOKEN=your-internal-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: uvicorn services.orchestrator.main:app --host 0.0.0.0 --port 9503
+    ports:
+      - "9503:9503"
+    environment:
+      - APP_STORAGE_BACKEND=postgres
+      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - INTERNAL_API_TOKEN=your-internal-token
+      - DIAGNOSTICS_SERVICE_URL=http://diagnostics:9501
+      - REPAIR_SERVICE_URL=http://repair:9502
+    depends_on:
+      - diagnostics
+      - repair
+
+  identity:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: uvicorn services.identity.main:app --host 0.0.0.0 --port 9504
+    ports:
+      - "9504:9504"
+    environment:
+      - APP_STORAGE_BACKEND=postgres
+      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - INTERNAL_API_TOKEN=your-internal-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  admin:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: uvicorn services.admin.main:app --host 0.0.0.0 --port 9505
+    ports:
+      - "9505:9505"
+    environment:
+      - APP_STORAGE_BACKEND=postgres
+      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - INTERNAL_API_TOKEN=your-internal-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  resume_processor:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: uvicorn services.resume_processor.main:app --host 0.0.0.0 --port 9506
+    ports:
+      - "9506:9506"
+    environment:
+      - APP_STORAGE_BACKEND=postgres
+      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - INTERNAL_API_TOKEN=your-internal-token
+      - LLAMA_MODEL_PATH=/models/llama-3-8b.gguf
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  job_scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: uvicorn services.job_scraper.main:app --host 0.0.0.0 --port 9507
+    ports:
+      - "9507:9507"
+    environment:
+      - APP_STORAGE_BACKEND=postgres
+      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - INTERNAL_API_TOKEN=your-internal-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  ats_matcher:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: uvicorn services.ats_matcher.main:app --host 0.0.0.0 --port 9508
+    ports:
+      - "9508:9508"
+    environment:
+      - APP_STORAGE_BACKEND=postgres
+      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - INTERNAL_API_TOKEN=your-internal-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  outreach:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: uvicorn services.outreach.main:app --host 0.0.0.0 --port 9509
+    ports:
+      - "9509:9509"
+    environment:
+      - APP_STORAGE_BACKEND=postgres
+      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - INTERNAL_API_TOKEN=your-internal-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  tracker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: uvicorn services.tracker.main:app --host 0.0.0.0 --port 9510
+    ports:
+      - "9510:9510"
+    environment:
+      - APP_STORAGE_BACKEND=postgres
+      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - INTERNAL_API_TOKEN=your-internal-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  inference:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: uvicorn services.inference.main:app --host 0.0.0.0 --port 9511
+    ports:
+      - "9511:9511"
+    environment:
+      - INTERNAL_API_TOKEN=your-internal-token
+    # In real world, would mount a volume for models
+    # volumes:
+    #   - ./models:/models
+
+  chatbot:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: uvicorn services.chatbot.main:app --host 0.0.0.0 --port 9512
+    ports:
+      - "9512:9512"
+    environment:
+      - APP_STORAGE_BACKEND=postgres
+      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - INTERNAL_API_TOKEN=your-internal-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  templates:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: uvicorn services.templates.main:app --host 0.0.0.0 --port 9513
+    ports:
+      - "9513:9513"
+    environment:
+      - APP_STORAGE_BACKEND=postgres
+      - DATABASE_URL=postgresql+psycopg://postgres:password@postgres:5432/actypity
+      - INTERNAL_API_TOKEN=your-internal-token
+      - FIGMA_ACCESS_TOKEN=your-figma-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:9500
+    depends_on:
+      - backend

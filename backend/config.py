@@ -86,6 +86,8 @@ class Settings:
     gemini_model: str
     # Model selection
     default_model_profile: Optional[str]
+    retrieval_local_fallback_enabled: bool
+    retrieval_candidate_pool_size: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -161,6 +163,8 @@ class Settings:
             gemini_api_key=os.getenv("GEMINI_API_KEY"),
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
             default_model_profile=os.getenv("DEFAULT_MODEL_PROFILE"),
+            retrieval_local_fallback_enabled=os.getenv("RETRIEVAL_LOCAL_FALLBACK_ENABLED", "true").lower() == "true",
+            retrieval_candidate_pool_size=int(os.getenv("RETRIEVAL_CANDIDATE_POOL_SIZE", "12")),
         )
 
     @classmethod
@@ -225,6 +229,8 @@ class Settings:
             gemini_api_key=None,
             gemini_model="gemini-2.0-flash",
             default_model_profile=None,
+            retrieval_local_fallback_enabled=True,
+            retrieval_candidate_pool_size=12,
         )
 
     @property

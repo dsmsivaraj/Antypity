@@ -66,7 +66,9 @@ export function ChatPage() {
     'How can I improve my resume for a senior engineer role?',
     'What ATS keywords should I add for a data science position?',
     'Review my resume summary and suggest improvements',
-    'What salary range should I expect for 5 years of experience?',
+    'Draft a cover letter for this job description.',
+    'Which jobs should I apply to first, and which ones should I skip?',
+    'Where can I find recruiter or HR contact details for this company?',
     'Help me prepare for a system design interview',
     'Which resume template is best for a startup environment?',
   ]
@@ -139,7 +141,11 @@ export function ChatPage() {
 
             {/* Input */}
             <div className="d-flex gap-2">
+              <label className="visually-hidden" htmlFor="career-chat-input">
+                Career chatbot message
+              </label>
               <input
+                id="career-chat-input"
                 type="text"
                 className="form-control"
                 placeholder="Ask about your resume, templates, job search…"
@@ -166,8 +172,9 @@ export function ChatPage() {
           <div className="card-body p-4">
             <div className="text-uppercase small text-secondary fw-semibold mb-2">Context</div>
             <div className="mb-3">
-              <label className="form-label small fw-semibold">Resume Text (optional)</label>
+              <label className="form-label small fw-semibold" htmlFor="chat-resume-context">Resume Text (optional)</label>
               <textarea
+                id="chat-resume-context"
                 className="form-control form-control-sm"
                 rows={4}
                 placeholder="Paste your resume text here for personalised advice…"
@@ -176,8 +183,9 @@ export function ChatPage() {
               />
             </div>
             <div>
-              <label className="form-label small fw-semibold">Job Description (optional)</label>
+              <label className="form-label small fw-semibold" htmlFor="chat-jd-context">Job Description (optional)</label>
               <textarea
+                id="chat-jd-context"
                 className="form-control form-control-sm"
                 rows={3}
                 placeholder="Paste a job description to match advice to the role…"

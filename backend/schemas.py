@@ -246,6 +246,7 @@ class ResumeParseResponse(ApiSchema):
     filename: str
     text: str
     metadata: Dict[str, Any]
+    parsed_fields: Optional[Dict[str, Any]] = None
 
 
 class ResumeAnalyzeRequest(ApiSchema):
@@ -284,7 +285,61 @@ class ResumeChatResponse(ApiSchema):
     used_llm: bool
     provider: str
     model_profile: str
+    citations: List[Dict[str, Any]] = Field(default_factory=list)
+    confidence: str = "medium"
     suggested_questions: List[str]
+
+
+class CoverLetterRequest(ApiSchema):
+    resume_text: str = Field(min_length=1)
+    jd_text: str = ""
+    target_role: str = Field(min_length=2, max_length=200)
+    company_name: str = Field(default="Hiring Team", min_length=2, max_length=200)
+    hiring_manager_name: str = ""
+    tone: str = "professional"
+    model_profile: Optional[str] = None
+
+
+class CoverLetterResponse(ApiSchema):
+    company_name: str
+    target_role: str
+    subject_line: str
+    cover_letter: str
+    talking_points: List[str]
+    citations: List[Dict[str, Any]] = Field(default_factory=list)
+    confidence: str = "medium"
+    used_llm: bool
+    provider: str
+    model_profile: str
+
+
+class RecruiterContactRequest(ApiSchema):
+    company_name: str = Field(min_length=2, max_length=200)
+    company_domain: str = ""
+    job_url: str = ""
+    source_text: str = ""
+    target_role: str = ""
+
+
+class RecruiterContact(ApiSchema):
+    name: str
+    title: str
+    email: Optional[str] = None
+    contact_url: Optional[str] = None
+    source: str
+    confidence: str
+    notes: str
+
+
+class RecruiterContactResponse(ApiSchema):
+    company_name: str
+    company_domain: Optional[str] = None
+    contacts: List[RecruiterContact]
+    lookup_urls: List[str]
+    verified_contact_count: int = 0
+    inferred_contact_count: int = 0
+    confidence: str = "medium"
+    provenance: List[str] = Field(default_factory=list)
 
 
 class ResumeTemplateDesignRequest(ApiSchema):
@@ -336,6 +391,8 @@ class JobDescriptionResponse(ApiSchema):
     source: str
     source_type: str
     keywords: List[str]
+    citations: List[Dict[str, Any]] = Field(default_factory=list)
+    confidence: str = "medium"
 
 
 class JobSearchRequest(ApiSchema):
@@ -362,6 +419,10 @@ class CareerAnalyticsResponse(ApiSchema):
     total_job_results: int
     average_match_score: float
     top_sources: Dict[str, int]
+    quality_total_evaluations: int = 0
+    quality_avg_grounding_score: float = 0.0
+    quality_avg_citation_count: float = 0.0
+    quality_drift_alerts: int = 0
 
 
 # ── Executions ──────────────────────────────────────────────────────────────
@@ -434,6 +495,28 @@ class AgentMetric(ApiSchema):
 
 class MetricsResponse(ApiSchema):
     metrics: List[AgentMetric]
+
+
+class PlatformInsightsResponse(ApiSchema):
+    registered_agents: int
+    model_profiles: int
+    local_model_profiles: int
+    metrics_rows: int
+    total_agent_executions: int
+    llm_execution_ratio: float
+    postgres_configured: bool
+    retrieval_backend: str
+    retrieval_document_count: int
+    retrieval_model_loaded: bool
+    retrieval_total_queries: int = 0
+    retrieval_hit_rate: float = 0.0
+    retrieval_avg_latency_ms: float = 0.0
+    retrieval_empty_context_rate: float = 0.0
+    quality_total_evaluations: int = 0
+    quality_avg_grounding_score: float = 0.0
+    quality_avg_citation_count: float = 0.0
+    quality_drift_alerts: int = 0
+    self_healing_running: bool
 
 
 # ── Logs ────────────────────────────────────────────────────────────────────
@@ -588,3 +671,32 @@ class OllamaStatusResponse(ApiSchema):
 
 class ApiError(ApiSchema):
     detail: str
+
+
+# ── Google OAuth / User Profile ──────────────────────────────────────────────
+
+class GoogleAuthRequest(ApiSchema):
+    id_token: str
+
+
+class UserResponse(ApiSchema):
+    id: str
+    email: str
+    full_name: Optional[str] = None
+    role: str
+    status: str
+    social_provider: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+class TokenResponse(ApiSchema):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+
+
+class UserProfileResponse(ApiSchema):
+    user_id: str
+    resume_data: Optional[Dict[str, Any]] = None
+    preferences: Optional[Dict[str, Any]] = None
+    updated_at: Optional[datetime] = None

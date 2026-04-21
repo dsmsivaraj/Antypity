@@ -217,6 +217,7 @@ class PostgreSQLDatabaseClient:
             Column("model_profile", String, nullable=True),
             Column("used_llm", Boolean, nullable=True),
             Column("provider", String, nullable=True),
+            Column("parsed_fields", JSON, nullable=True),
             Column("created_by", String, nullable=True),
             Column("created_at", DateTime(timezone=True), nullable=False),
         )
@@ -251,6 +252,19 @@ class PostgreSQLDatabaseClient:
             Column("created_at", DateTime(timezone=True), nullable=False),
         )
 
+        self.response_quality_metrics = Table(
+            "response_quality_metrics",
+            self._metadata,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+            _str("response_type", nullable=False),
+            Column("grounding_score", Integer, nullable=False),
+            Column("citation_count", Integer, nullable=False),
+            _str("confidence", nullable=False),
+            Column("drift_flag", Boolean, nullable=False),
+            Column("metadata", JSON, nullable=True),
+            Column("created_at", DateTime(timezone=True), nullable=False),
+        )
+
     # ── Connection management ────────────────────────────────────────────────
 
     @property
@@ -272,13 +286,13 @@ class PostgreSQLDatabaseClient:
             future=True,
         )
         self._metadata.create_all(self._engine)
-        self._apply_migrations()
-        # Enable pgvector only if the extension is installed on this PostgreSQL instance
+        # Enable pgvector if available on this PostgreSQL instance.
         try:
             with self._engine.begin() as conn:
                 conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         except Exception:
-            pass  # pgvector not installed — vector search features will be unavailable
+            pass
+        self._apply_migrations()
 
     def _apply_migrations(self) -> None:
         """Add columns that were introduced after the initial table creation."""
@@ -290,13 +304,72 @@ class PostgreSQLDatabaseClient:
             "ALTER TABLE resume_analyses ADD COLUMN IF NOT EXISTS used_llm BOOLEAN DEFAULT false",
             "ALTER TABLE resume_analyses ADD COLUMN IF NOT EXISTS provider VARCHAR",
             "ALTER TABLE resume_analyses ADD COLUMN IF NOT EXISTS source_filename VARCHAR",
+            "ALTER TABLE resume_analyses ADD COLUMN IF NOT EXISTS parsed_fields JSONB",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_social ON users(social_provider, social_id) WHERE social_provider IS NOT NULL AND social_id IS NOT NULL",
+            """
+            CREATE TABLE IF NOT EXISTS retrieval_metrics (
+                id BIGSERIAL PRIMARY KEY,
+                query_text TEXT NOT NULL,
+                top_k INTEGER NOT NULL,
+                result_count INTEGER NOT NULL,
+                avg_score DOUBLE PRECISION NOT NULL,
+                latency_ms DOUBLE PRECISION NOT NULL,
+                used_faiss BOOLEAN NOT NULL DEFAULT false,
+                empty_context BOOLEAN NOT NULL DEFAULT false,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_retrieval_metrics_created_at ON retrieval_metrics(created_at)",
+            """
+            CREATE TABLE IF NOT EXISTS response_quality_metrics (
+                id BIGSERIAL PRIMARY KEY,
+                response_type TEXT NOT NULL,
+                grounding_score INTEGER NOT NULL,
+                citation_count INTEGER NOT NULL,
+                confidence TEXT NOT NULL,
+                drift_flag BOOLEAN NOT NULL DEFAULT false,
+                metadata JSON,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_response_quality_metrics_created_at ON response_quality_metrics(created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_response_quality_metrics_response_type ON response_quality_metrics(response_type)",
         ]
         try:
             with self._engine.begin() as conn:
                 for stmt in migrations:
                     conn.execute(text(stmt))
+                if self._pgvector_enabled(conn):
+                    conn.execute(
+                        text(
+                            """
+                            CREATE TABLE IF NOT EXISTS resume_embeddings (
+                                id BIGSERIAL PRIMARY KEY,
+                                doc_id TEXT NOT NULL,
+                                section_id TEXT NOT NULL,
+                                excerpt TEXT,
+                                embedding vector(384),
+                                score DOUBLE PRECISION NOT NULL DEFAULT 0,
+                                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                                UNIQUE (doc_id, section_id)
+                            )
+                            """
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "CREATE INDEX IF NOT EXISTS idx_resume_embeddings_doc_id ON resume_embeddings(doc_id)"
+                        )
+                    )
         except Exception:
             pass  # non-PostgreSQL backends or permission issues — safe to skip
+
+    def _pgvector_enabled(self, conn) -> bool:
+        return bool(
+            conn.execute(
+                text("SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')")
+            ).scalar()
+        )
 
     @property
     def engine(self) -> Engine:
@@ -313,6 +386,241 @@ class PostgreSQLDatabaseClient:
             return DatabaseStatus(connected=True, backend="postgres", detail="ok")
         except Exception as exc:
             return DatabaseStatus(connected=False, backend="postgres", detail=str(exc))
+
+    def has_pgvector(self) -> bool:
+        if not self.is_configured:
+            return False
+        try:
+            with self.engine.connect() as conn:
+                return self._pgvector_enabled(conn)
+        except Exception:
+            return False
+
+    def count_resume_embeddings(self) -> int:
+        if not self.has_pgvector():
+            return 0
+        with self.engine.connect() as conn:
+            value = conn.execute(text("SELECT COUNT(*) FROM resume_embeddings")).scalar()
+        return int(value or 0)
+
+    def upsert_resume_embedding(
+        self,
+        *,
+        doc_id: str,
+        section_id: str,
+        excerpt: str,
+        embedding: List[float],
+        score: float = 0.0,
+    ) -> bool:
+        if not self.has_pgvector():
+            return False
+        vector_literal = "[" + ",".join(f"{float(item):.8g}" for item in embedding) + "]"
+        stmt = text(
+            """
+            INSERT INTO resume_embeddings (doc_id, section_id, excerpt, embedding, score)
+            VALUES (:doc_id, :section_id, :excerpt, CAST(:embedding AS vector), :score)
+            ON CONFLICT (doc_id, section_id)
+            DO UPDATE SET
+                excerpt = EXCLUDED.excerpt,
+                embedding = EXCLUDED.embedding,
+                score = EXCLUDED.score
+            """
+        )
+        with self.engine.begin() as conn:
+            conn.execute(
+                stmt,
+                {
+                    "doc_id": doc_id,
+                    "section_id": section_id,
+                    "excerpt": excerpt[:4000],
+                    "embedding": vector_literal,
+                    "score": float(score),
+                },
+            )
+        return True
+
+    def query_resume_embeddings(
+        self,
+        *,
+        embedding: List[float],
+        top_k: int = 5,
+        doc_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        if not self.has_pgvector():
+            return []
+        vector_literal = "[" + ",".join(f"{float(item):.8g}" for item in embedding) + "]"
+        where_clause = "WHERE doc_id = :doc_id" if doc_id else ""
+        stmt = text(
+            f"""
+            SELECT
+                doc_id,
+                section_id,
+                excerpt AS text,
+                1 - (embedding <=> CAST(:embedding AS vector)) AS score
+            FROM resume_embeddings
+            {where_clause}
+            ORDER BY embedding <=> CAST(:embedding AS vector) ASC
+            LIMIT :top_k
+            """
+        )
+        params: Dict[str, Any] = {"embedding": vector_literal, "top_k": int(top_k)}
+        if doc_id:
+            params["doc_id"] = doc_id
+        with self.engine.connect() as conn:
+            rows = conn.execute(stmt, params).mappings().all()
+        return [_serialize(dict(row)) for row in rows]
+
+    def record_retrieval_metric(
+        self,
+        *,
+        query_text: str,
+        top_k: int,
+        result_count: int,
+        avg_score: float,
+        latency_ms: float,
+        used_faiss: bool,
+        empty_context: bool,
+    ) -> None:
+        stmt = text(
+            """
+            INSERT INTO retrieval_metrics
+                (query_text, top_k, result_count, avg_score, latency_ms, used_faiss, empty_context)
+            VALUES
+                (:query_text, :top_k, :result_count, :avg_score, :latency_ms, :used_faiss, :empty_context)
+            """
+        )
+        with self.engine.begin() as conn:
+            conn.execute(
+                stmt,
+                {
+                    "query_text": query_text[:4000],
+                    "top_k": int(top_k),
+                    "result_count": int(result_count),
+                    "avg_score": float(avg_score),
+                    "latency_ms": float(latency_ms),
+                    "used_faiss": bool(used_faiss),
+                    "empty_context": bool(empty_context),
+                },
+            )
+
+    def get_retrieval_metrics_summary(self) -> Dict[str, Any]:
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT
+                        COUNT(*) AS total_queries,
+                        COALESCE(AVG(latency_ms), 0) AS avg_latency_ms,
+                        COALESCE(AVG(avg_score), 0) AS avg_score,
+                        COALESCE(AVG(CASE WHEN empty_context THEN 1.0 ELSE 0.0 END), 0) AS empty_context_rate,
+                        COALESCE(AVG(CASE WHEN result_count > 0 THEN 1.0 ELSE 0.0 END), 0) AS hit_rate
+                    FROM retrieval_metrics
+                    """
+                )
+            ).mappings().first()
+        if not row:
+            return {
+                "total_queries": 0,
+                "avg_latency_ms": 0.0,
+                "avg_score": 0.0,
+                "empty_context_rate": 0.0,
+                "hit_rate": 0.0,
+            }
+        result = dict(row)
+        return {
+            "total_queries": int(result.get("total_queries") or 0),
+            "avg_latency_ms": float(result.get("avg_latency_ms") or 0.0),
+            "avg_score": float(result.get("avg_score") or 0.0),
+            "empty_context_rate": float(result.get("empty_context_rate") or 0.0),
+            "hit_rate": float(result.get("hit_rate") or 0.0),
+        }
+
+    def record_response_quality_metric(
+        self,
+        *,
+        response_type: str,
+        grounding_score: int,
+        citation_count: int,
+        confidence: str,
+        drift_flag: bool,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        stmt = insert(self.response_quality_metrics).values(
+            response_type=response_type[:100],
+            grounding_score=max(0, min(int(grounding_score), 100)),
+            citation_count=max(0, int(citation_count)),
+            confidence=(confidence or "medium")[:20],
+            drift_flag=bool(drift_flag),
+            metadata=metadata,
+            created_at=datetime.now(timezone.utc),
+        )
+        with self.engine.begin() as conn:
+            conn.execute(stmt)
+
+    def get_response_quality_summary(self) -> Dict[str, Any]:
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT
+                        COUNT(*) AS total_evaluations,
+                        COALESCE(AVG(grounding_score), 0) AS avg_grounding_score,
+                        COALESCE(AVG(citation_count), 0) AS avg_citation_count,
+                        COALESCE(SUM(CASE WHEN drift_flag THEN 1 ELSE 0 END), 0) AS drift_alerts
+                    FROM response_quality_metrics
+                    """
+                )
+            ).mappings().first()
+        if not row:
+            return {
+                "total_evaluations": 0,
+                "avg_grounding_score": 0.0,
+                "avg_citation_count": 0.0,
+                "drift_alerts": 0,
+            }
+        result = dict(row)
+        return {
+            "total_evaluations": int(result.get("total_evaluations") or 0),
+            "avg_grounding_score": float(result.get("avg_grounding_score") or 0.0),
+            "avg_citation_count": float(result.get("avg_citation_count") or 0.0),
+            "drift_alerts": int(result.get("drift_alerts") or 0),
+        }
+
+    def lexical_search_resume_embeddings(
+        self,
+        *,
+        keywords: List[str],
+        top_k: int = 5,
+        doc_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        if not self.has_pgvector() or not keywords:
+            return []
+        clauses = []
+        params: Dict[str, Any] = {"top_k": int(top_k)}
+        for idx, keyword in enumerate(keywords):
+            key = f"kw_{idx}"
+            clauses.append(f"CASE WHEN excerpt ILIKE :{key} THEN 1 ELSE 0 END")
+            params[key] = f"%{keyword}%"
+        where_doc = "AND doc_id = :doc_id" if doc_id else ""
+        if doc_id:
+            params["doc_id"] = doc_id
+        stmt = text(
+            f"""
+            SELECT
+                doc_id,
+                section_id,
+                excerpt AS text,
+                ({' + '.join(clauses)})::double precision AS score
+            FROM resume_embeddings
+            WHERE excerpt IS NOT NULL
+            {where_doc}
+            ORDER BY score DESC, created_at DESC
+            LIMIT :top_k
+            """
+        )
+        with self.engine.connect() as conn:
+            rows = conn.execute(stmt, params).mappings().all()
+        return [row for row in (_serialize(dict(r)) for r in rows) if float(row.get("score", 0.0)) > 0]
 
     # ── Executions ───────────────────────────────────────────────────────────
 
@@ -691,6 +999,94 @@ class PostgreSQLDatabaseClient:
         with self.engine.begin() as conn:
             conn.execute(insert(self.job_search_results), payloads)
 
+    # ── Users / profiles ────────────────────────────────────────────────────
+
+    def upsert_user(
+        self,
+        *,
+        email: str,
+        full_name: str,
+        social_provider: str,
+        social_id: str,
+        role: str = "applicant",
+    ) -> Dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        record: Dict[str, Any] = {
+            "id": str(uuid4()),
+            "email": email,
+            "full_name": full_name,
+            "social_provider": social_provider,
+            "social_id": social_id,
+            "role": role,
+            "status": "active",
+            "created_at": now,
+            "updated_at": now,
+        }
+        stmt = pg_insert(self.users).values(**record).on_conflict_do_update(
+            index_elements=["email"],
+            set_={
+                "full_name": full_name,
+                "social_provider": social_provider,
+                "social_id": social_id,
+                "status": "active",
+                "updated_at": now,
+            },
+        )
+        with self.engine.begin() as conn:
+            conn.execute(stmt)
+        # Fetch back to get the actual id (upsert may have kept original id)
+        return self.get_user_by_email(email) or _serialize(record)  # type: ignore[return-value]
+
+    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        query = select(self.users).where(self.users.c.email == email)
+        with self.engine.connect() as conn:
+            row = conn.execute(query).mappings().first()
+        return _serialize(dict(row)) if row else None
+
+    def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
+        query = select(self.users).where(self.users.c.id == user_id)
+        with self.engine.connect() as conn:
+            row = conn.execute(query).mappings().first()
+        return _serialize(dict(row)) if row else None
+
+    def upsert_user_profile(
+        self,
+        *,
+        user_id: str,
+        resume_data: Optional[Dict[str, Any]] = None,
+        preferences: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        record: Dict[str, Any] = {
+            "user_id": user_id,
+            "updated_at": now,
+        }
+        if resume_data is not None:
+            record["resume_data"] = resume_data
+        if preferences is not None:
+            record["preferences"] = preferences
+        set_clause: Dict[str, Any] = {"updated_at": now}
+        if resume_data is not None:
+            set_clause["resume_data"] = resume_data
+        if preferences is not None:
+            set_clause["preferences"] = preferences
+        stmt = pg_insert(self.user_profiles).values(
+            user_id=user_id,
+            resume_data=resume_data,
+            onboarding_metadata=None,
+            preferences=preferences,
+            embedding=None,
+            updated_at=now,
+        ).on_conflict_do_update(index_elements=["user_id"], set_=set_clause)
+        with self.engine.begin() as conn:
+            conn.execute(stmt)
+
+    def get_user_profile(self, user_id: str) -> Optional[Dict[str, Any]]:
+        query = select(self.user_profiles).where(self.user_profiles.c.user_id == user_id)
+        with self.engine.connect() as conn:
+            row = conn.execute(query).mappings().first()
+        return _serialize(dict(row)) if row else None
+
     def get_career_analytics(self) -> Dict[str, Any]:
         with self.engine.connect() as conn:
             total_resume_analyses = conn.execute(
@@ -720,6 +1116,19 @@ class PostgreSQLDatabaseClient:
                 )
             ).mappings().all()
             sources = {row["source"]: int(row["count"]) for row in source_rows}
+            quality_row = conn.execute(
+                text(
+                    """
+                    SELECT
+                        COUNT(*) AS total_evaluations,
+                        COALESCE(AVG(grounding_score), 0) AS avg_grounding_score,
+                        COALESCE(AVG(citation_count), 0) AS avg_citation_count,
+                        COALESCE(SUM(CASE WHEN drift_flag THEN 1 ELSE 0 END), 0) AS drift_alerts
+                    FROM response_quality_metrics
+                    """
+                )
+            ).mappings().first()
+            quality = dict(quality_row or {})
 
         return {
             "total_resume_analyses": int(total_resume_analyses or 0),
@@ -728,6 +1137,10 @@ class PostgreSQLDatabaseClient:
             "total_job_results": int(total_job_results or 0),
             "average_match_score": round(float(avg_match_score or 0.0), 2),
             "top_sources": sources,
+            "quality_total_evaluations": int(quality.get("total_evaluations") or 0),
+            "quality_avg_grounding_score": round(float(quality.get("avg_grounding_score") or 0.0), 2),
+            "quality_avg_citation_count": round(float(quality.get("avg_citation_count") or 0.0), 2),
+            "quality_drift_alerts": int(quality.get("drift_alerts") or 0),
         }
 
 

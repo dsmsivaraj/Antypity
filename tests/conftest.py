@@ -25,6 +25,7 @@ from backend.config import Settings
 from backend.container import AppContainer
 from backend.database import PostgreSQLDatabaseClient
 from backend.diagnostics import DiagnosticsService
+from backend.embeddings_service import EmbeddingService
 from backend.figma_client import FigmaClient
 from backend.gemini_client import GeminiClient
 from backend.internal_api import InternalPlatformAPI
@@ -143,10 +144,18 @@ def container(
     mock_self_healing.get_status.return_value = {
         "is_running": False, "cycle_count": 0, "last_cycle_at": None, "history": []
     }
+    mock_embedding = MagicMock(spec=EmbeddingService)
+    mock_embedding.index_document.return_value = None
+    mock_embedding.query.return_value = []
+    mock_embedding.status.return_value = {
+        "backend": "token-index", "model_loaded": False, "pgvector_enabled": False,
+        "faiss_enabled": False, "fallback_enabled": True, "document_count": 0,
+    }
     career_service = CareerService(
         settings=test_settings,
         model_router=model_router,
         database_client=mock_db,
+        embedding_service=mock_embedding,
     )
     return AppContainer(
         settings=test_settings,
@@ -169,6 +178,7 @@ def container(
         gemini_client=mock_gemini,
         figma_client=FigmaClient(),
         chat_store=ChatStore(),
+        embedding_service=mock_embedding,
     )
 
 
@@ -247,10 +257,12 @@ def postgres_client(postgres_dsn: Optional[str]):
         adzuna_api_key=None,
         google_client_id=None,
         google_client_secret=None,
-        gemini_api_key=None,
-        gemini_model="gemini-2.0-flash",
-        default_model_profile=None,
-    )
+            gemini_api_key=None,
+            gemini_model="gemini-2.0-flash",
+            default_model_profile=None,
+            retrieval_local_fallback_enabled=True,
+            retrieval_candidate_pool_size=12,
+        )
     db = PostgreSQLDatabaseClient(settings)
     try:
         db.connect()

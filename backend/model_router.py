@@ -9,6 +9,7 @@ from .gemini_client import GeminiClient
 from .llama_client import LocalLlamaClient
 from .llm_client import LLMClient, LLMResult
 from .local_llm import OllamaClient
+from .llm_adapter import normalize_completion
 
 _logger = logging.getLogger(__name__)
 
@@ -55,13 +56,16 @@ class ModelRouter:
         requested = self.get_profile(model_profile) if model_profile else None
         profile = requested or self._default_profile()
 
+        # Fallback provider (deterministic) - normalize any output
         if profile.provider == "fallback":
-            return profile, self.llm_client.complete(
+            res = self.llm_client.complete(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 deployment=None,
             )
+            return profile, normalize_completion(res, default_provider="fallback")
 
+        # Gemini cloud provider with fallback chain
         if profile.provider == "gemini":
             if self.gemini_client is None or not self.gemini_client.enabled:
                 _logger.warning("Gemini profile requested but client not available — falling back to Ollama/fallback.")
@@ -72,6 +76,7 @@ class ModelRouter:
                 system_prompt=system_prompt,
                 model=profile.deployment,
             )
+            result = normalize_completion(result, default_provider="gemini")
             if not result.used_llm:
                 # Gemini failed (quota, auth, network) — fall back to Ollama or deterministic
                 _logger.warning("Gemini call failed (%s) — falling back to next provider.", result.provider)
@@ -82,6 +87,7 @@ class ModelRouter:
                 return self.complete(model_profile=fallback.id, prompt=prompt, system_prompt=system_prompt)
             return profile, result
 
+        # Local LLaMA (llama-cpp)
         if profile.provider == "llama-cpp":
             if self.llama_client is None:
                 return profile, LLMResult(
@@ -89,13 +95,15 @@ class ModelRouter:
                     used_llm=False,
                     provider="llama-fallback",
                 )
-            return profile, self.llama_client.complete(
+            res = self.llama_client.complete(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 profile=profile.id,
                 model_path=profile.model_path,
             )
+            return profile, normalize_completion(res, default_provider="llama-cpp")
 
+        # Ollama local HTTP service
         if profile.provider.startswith("ollama"):
             if self.ollama_client is None or not self.ollama_client.enabled:
                 return profile, LLMResult(
@@ -103,13 +111,16 @@ class ModelRouter:
                     used_llm=False,
                     provider="ollama-fallback",
                 )
-            return profile, self.ollama_client.complete(prompt=prompt, system_prompt=system_prompt)
+            res = self.ollama_client.complete(prompt=prompt, system_prompt=system_prompt)
+            return profile, normalize_completion(res, default_provider=f"ollama/{self.ollama_client.model}")
 
-        return profile, self.llm_client.complete(
+        # Default cloud LLM client
+        res = self.llm_client.complete(
             prompt=prompt,
             system_prompt=system_prompt,
             deployment=profile.deployment,
         )
+        return profile, normalize_completion(res, default_provider=profile.provider)
 
     def _default_profile(self) -> ModelProfile:
         # Honour explicit override from DEFAULT_MODEL_PROFILE env var

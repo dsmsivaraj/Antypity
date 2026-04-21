@@ -14,6 +14,7 @@ class LLMResult:
     content: str
     used_llm: bool
     provider: str
+    provider_meta: dict | None = None
 
 
 class LLMClient:
