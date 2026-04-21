@@ -82,6 +82,8 @@ from .schemas import (
     ResumeWriteRequest,
     ResumeWriteResponse,
     TaskRequest,
+    EmailLoginRequest,
+    EmailRegisterRequest,
     GoogleAuthRequest,
     TokenResponse,
     UserProfileResponse,
@@ -241,6 +243,45 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
             social_provider="google",
             social_id=google_user["social_id"],
         )
+        from .jwt_utils import create_access_token
+        token = create_access_token({"sub": user["id"], "email": user["email"], "role": user.get("role", "applicant")})
+        return TokenResponse(
+            access_token=token,
+            token_type="bearer",
+            user=UserResponse(**{k: v for k, v in user.items() if k in UserResponse.model_fields}),
+        )
+
+    @app.post("/auth/register", response_model=TokenResponse, tags=["auth"])
+    async def email_register(request: Request, body: EmailRegisterRequest):
+        container: AppContainer = request.app.state.container
+        if not container.database_client.is_configured:
+            raise HTTPException(status_code=503, detail="Database not configured — email auth unavailable.")
+        from passlib.context import CryptContext
+        pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+        if container.database_client.get_user_by_email(body.email):
+            raise HTTPException(status_code=409, detail="Email already registered. Please sign in.")
+        pw_hash = pwd_ctx.hash(body.password)
+        user = container.database_client.create_user_with_password(
+            email=body.email, full_name=body.full_name, password_hash=pw_hash
+        )
+        from .jwt_utils import create_access_token
+        token = create_access_token({"sub": user["id"], "email": user["email"], "role": user.get("role", "applicant")})
+        return TokenResponse(
+            access_token=token,
+            token_type="bearer",
+            user=UserResponse(**{k: v for k, v in user.items() if k in UserResponse.model_fields}),
+        )
+
+    @app.post("/auth/login", response_model=TokenResponse, tags=["auth"])
+    async def email_login(request: Request, body: EmailLoginRequest):
+        container: AppContainer = request.app.state.container
+        if not container.database_client.is_configured:
+            raise HTTPException(status_code=503, detail="Database not configured — email auth unavailable.")
+        from passlib.context import CryptContext
+        pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+        user = container.database_client.get_user_by_email(body.email)
+        if not user or not user.get("password_hash") or not pwd_ctx.verify(body.password, user["password_hash"]):
+            raise HTTPException(status_code=401, detail="Invalid email or password.")
         from .jwt_utils import create_access_token
         token = create_access_token({"sub": user["id"], "email": user["email"], "role": user.get("role", "applicant")})
         return TokenResponse(

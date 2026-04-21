@@ -135,6 +135,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ id_token: idToken }),
     }),
+  emailLogin: (email: string, password: string) =>
+    request<{ access_token: string; token_type: string; user: User }>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
+  emailRegister: (email: string, password: string, fullName?: string) =>
+    request<{ access_token: string; token_type: string; user: User }>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ email, password, full_name: fullName }),
+    }),
   getAuthMe: (jwt: string) =>
     fetch(`${API_BASE_URL}/auth/me`, {
       headers: { Authorization: `Bearer ${jwt}` },

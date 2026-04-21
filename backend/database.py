@@ -153,6 +153,7 @@ class PostgreSQLDatabaseClient:
             _str("id", primary_key=True),
             _str("email", nullable=False),
             _str("full_name", nullable=True),
+            _str("password_hash", nullable=True),
             _str("social_provider", nullable=True),  # google, facebook, etc.
             _str("social_id", nullable=True),
             _str("role", nullable=False),  # admin, recruiter, applicant
@@ -305,6 +306,7 @@ class PostgreSQLDatabaseClient:
             "ALTER TABLE resume_analyses ADD COLUMN IF NOT EXISTS provider VARCHAR",
             "ALTER TABLE resume_analyses ADD COLUMN IF NOT EXISTS source_filename VARCHAR",
             "ALTER TABLE resume_analyses ADD COLUMN IF NOT EXISTS parsed_fields JSONB",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_social ON users(social_provider, social_id) WHERE social_provider IS NOT NULL AND social_id IS NOT NULL",
             """
             CREATE TABLE IF NOT EXISTS retrieval_metrics (
@@ -1035,6 +1037,32 @@ class PostgreSQLDatabaseClient:
         with self.engine.begin() as conn:
             conn.execute(stmt)
         # Fetch back to get the actual id (upsert may have kept original id)
+        return self.get_user_by_email(email) or _serialize(record)  # type: ignore[return-value]
+
+    def create_user_with_password(
+        self,
+        *,
+        email: str,
+        full_name: Optional[str],
+        password_hash: str,
+        role: str = "applicant",
+    ) -> Dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        record: Dict[str, Any] = {
+            "id": str(uuid4()),
+            "email": email,
+            "full_name": full_name or "",
+            "password_hash": password_hash,
+            "social_provider": None,
+            "social_id": None,
+            "role": role,
+            "status": "active",
+            "created_at": now,
+            "updated_at": now,
+        }
+        stmt = pg_insert(self.users).values(**record).on_conflict_do_nothing(index_elements=["email"])
+        with self.engine.begin() as conn:
+            conn.execute(stmt)
         return self.get_user_by_email(email) or _serialize(record)  # type: ignore[return-value]
 
     def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:

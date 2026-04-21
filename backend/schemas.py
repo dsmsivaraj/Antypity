@@ -673,10 +673,21 @@ class ApiError(ApiSchema):
     detail: str
 
 
-# ── Google OAuth / User Profile ──────────────────────────────────────────────
+# ── Auth / User / Profile ────────────────────────────────────────────────────
 
 class GoogleAuthRequest(ApiSchema):
     id_token: str
+
+
+class EmailRegisterRequest(ApiSchema):
+    email: str
+    password: str
+    full_name: Optional[str] = None
+
+
+class EmailLoginRequest(ApiSchema):
+    email: str
+    password: str
 
 
 class UserResponse(ApiSchema):
