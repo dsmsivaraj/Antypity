@@ -1,29 +1,161 @@
 # Antypity
 
-Antypity contains the Actypity production-ready application base for building agent-enabled products with a FastAPI backend and a React frontend.
+Antypity is a production-ready career intelligence and agent orchestration platform built with a FastAPI backend and a React + Bootstrap frontend.
 
 [![CI](https://github.com/dsmsivaraj/Antypity/actions/workflows/ci.yml/badge.svg)](https://github.com/dsmsivaraj/Antypity/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](./backend/requirements.txt)
-[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=111827)](./frontend/package.json)
 
-## What is included
+## What the application does
 
-- FastAPI app factory with health, readiness, agent registry, execution, and history endpoints
-- Deterministic agent routing with a pluggable LLM adapter
-- Safe startup behavior when Azure OpenAI or PostgreSQL are not configured
-- PostgreSQL-ready execution persistence with environment-driven local or cloud connectivity
-- Typed React frontend with a Bootstrap-based control plane, model catalog, execution workspace, registry view, and history panel
-- Docker and Kubernetes manifests aligned to the same runtime contract
+- Multi-agent and multi-model orchestration through internal platform APIs
+- PostgreSQL-backed persistence for executions, logs, metrics, auth, agent registry, workflows, and career artifacts
+- Local resume parsing for `pdf`, `docx`, and `txt`
+- Resume analysis against a job description using local LLaMA/Ollama when available, with Azure OpenAI and deterministic fallbacks
+- Resume chatbot for querying resume strength, ATS gaps, and JD fit
+- Trusted job source discovery for LinkedIn, Indeed, Glassdoor, Wellfound, Naukri, Dice, and ZipRecruiter
+- Resume template generation with Figma-ready creative briefs and a built-in template catalog
 
-## Repository assets
+## Main product surfaces
 
-- [Contribution Guide](./CONTRIBUTING.md)
-- [License](./LICENSE)
-- [Application Knowledge](./APPLICATION_KNOWLEDGE.md)
-- [Application Skills](./APPLICATION_SKILLS.md)
-- [Application Workflow](./APPLICATION_WORKFLOW.md)
-- [Validation Report](./VALIDATION_REPORT.md)
+- `Overview` — orchestration console, execution history, diagnostics, self-healing status
+- `Resume Lab` — upload, parse, analyze, and chat about a resume
+- `Job Discovery` — normalize a JD and generate trusted job portal search links
+- `Template Studio` — browse templates and generate new resume template briefs for Figma
+
+## Local runtime contract
+
+- Backend: `http://localhost:9500`
+- Frontend dev: `http://localhost:5173`
+- Frontend build preview: `http://localhost:4173`
+- Local Ollama default: `http://localhost:11434`
+
+## Environment
+
+### Core
+
+```env
+APP_STORAGE_BACKEND=postgres
+DATABASE_URL=postgresql+psycopg:///actypity?host=/tmp&user=<your_local_user>
+API_PORT=9500
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+BOOTSTRAP_ADMIN_TOKEN=change-me
+INTERNAL_API_TOKEN=change-me
+```
+
+### Optional Azure OpenAI
+
+```env
+AZURE_OPENAI_API_KEY=
+AZURE_OPENAI_ENDPOINT=
+AZURE_OPENAI_DEPLOYMENT=
+AZURE_OPENAI_PLANNER_DEPLOYMENT=
+AZURE_OPENAI_REVIEWER_DEPLOYMENT=
+```
+
+### Optional local LLaMA via `llama-cpp-python`
+
+```env
+LLAMA_MODEL_PATH=/absolute/path/to/model.gguf
+LLAMA_RESUME_MODEL_PATH=/absolute/path/to/resume-model.gguf
+LLAMA_JOB_MODEL_PATH=/absolute/path/to/job-model.gguf
+LLAMA_TEMPLATE_MODEL_PATH=/absolute/path/to/template-model.gguf
+LLAMA_N_CTX=4096
+LLAMA_TEMPERATURE=0.2
+```
+
+### Optional Ollama
+
+```env
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama3
+```
+
+### Optional Figma
+
+```env
+FIGMA_ACCESS_TOKEN=
+FIGMA_TEAM_ID=
+FIGMA_FILE_KEY=
+```
+
+## Run the application
+
+### 1. Backend
+
+```bash
+./activate_and_update_venv.sh
+./run_backend.sh
+```
+
+If you want local `llama-cpp-python` support too:
+
+```bash
+source backend/venv/bin/activate
+pip install -r backend/requirements-llama.txt
+```
+
+If you want Ollama-backed local agents:
+
+```bash
+ollama serve
+ollama pull llama3
+```
+
+### 2. Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`.
+
+## Test the application
+
+### Frontend
+
+```bash
+cd frontend
+npm run lint
+npm run build
+```
+
+### Backend
+
+```bash
+./backend/venv/bin/python -m py_compile backend/*.py agents/*.py shared/*.py tests/*.py
+./backend/venv/bin/pytest tests/test_api.py -q
+./backend/venv/bin/pytest tests/test_auth.py tests/test_storage.py tests/test_agents.py tests/test_workflow.py tests/test_orchestrator.py tests/test_diagnostics.py -q
+./backend/venv/bin/pytest tests/test_postgres_integration.py -q
+```
+
+Note:
+- `tests/test_postgres_integration.py` now skips automatically when `DATABASE_URL` is not reachable from the current environment.
+
+## Key backend endpoints
+
+- `GET /health`
+- `GET /ready`
+- `GET /auth/status`
+- `POST /auth/bootstrap`
+- `GET /agents`
+- `GET /models`
+- `POST /execute`
+- `GET /executions`
+- `POST /resume/parse`
+- `POST /resume/analyze`
+- `POST /resume/chat`
+- `GET /resume/templates`
+- `POST /resume/templates/design`
+- `GET /job/sources`
+- `POST /job/extract`
+- `POST /job/search`
+- `GET /tracker/analytics`
+- `POST /chat`
+- `GET /chat/history/{session_id}`
+- `GET /metrics`
+- `GET /logs`
 
 ## Engineering references
 
@@ -31,178 +163,4 @@ Antypity contains the Actypity production-ready application base for building ag
 - [Application Skills](./APPLICATION_SKILLS.md)
 - [Application Workflow](./APPLICATION_WORKFLOW.md)
 - [Validation Report](./VALIDATION_REPORT.md)
-
-## Screenshot
-
-![Antypity UI](./docs/assets/antypity-hero.png)
-
-## Quick start
-
-### Local full stack
-
-1. Configure `.env`
-2. Start the backend:
-   `./run_backend.sh`
-3. Start the frontend:
-   `cd frontend && npm install && npm run dev`
-4. Open:
-   `http://localhost:5173`
-
-## Runtime contract
-
-- Backend: `http://localhost:8000`
-- Frontend dev: `http://localhost:5173`
-- Frontend preview/container: `http://localhost:4173`
-
-## Backend setup
-
-1. Create the virtual environment if needed:
-   `python3 -m venv backend/venv`
-2. Start the backend:
-   `./run_backend.sh`
-
-The script activates the virtual environment, installs backend dependencies, sets `PYTHONPATH`, and runs:
-
-`uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000`
-
-### Backend environment variables
-
-Required only for Azure OpenAI:
-
-- `AZURE_OPENAI_API_KEY`
-- `AZURE_OPENAI_ENDPOINT`
-- `AZURE_OPENAI_DEPLOYMENT`
-
-Optional platform settings:
-
-- `APP_NAME`
-- `APP_VERSION`
-- `API_HOST`
-- `API_PORT`
-- `CORS_ORIGINS`
-- `APP_STORAGE_BACKEND` (`postgres`, `json`, or `memory`) and defaults to `postgres`
-- `APP_STORAGE_PATH`
-- `DATABASE_URL` or `POSTGRES_DSN`
-- `POSTGRES_HOST`
-- `POSTGRES_PORT`
-- `POSTGRES_DATABASE`
-- `POSTGRES_USER`
-- `POSTGRES_PASSWORD`
-- `POSTGRES_SSLMODE`
-- `AUTH_ENABLED`
-- `DEFAULT_ADMIN_KEY`
-- `BOOTSTRAP_ADMIN_TOKEN`
-- `SECRET_KEY`
-
-### PostgreSQL configuration modes
-
-Local PostgreSQL via explicit settings:
-
-- `APP_STORAGE_BACKEND=postgres`
-- `POSTGRES_HOST=localhost`
-- `POSTGRES_PORT=5432`
-- `POSTGRES_DATABASE=actypity`
-- `POSTGRES_USER=postgres`
-- `POSTGRES_PASSWORD=postgres`
-
-Cloud PostgreSQL via connection string:
-
-- `APP_STORAGE_BACKEND=postgres`
-- `DATABASE_URL=postgresql+psycopg://user:password@host:5432/database?sslmode=require`
-
-Offline development fallback:
-
-- `APP_STORAGE_BACKEND=json`
-
-or:
-
-- `APP_STORAGE_BACKEND=memory`
-
-### Current validated local PostgreSQL setup
-
-```env
-APP_STORAGE_BACKEND=postgres
-DATABASE_URL=postgresql+psycopg:///actypity?host=/tmp&user=kdn_aisivarajm
-```
-
-## Frontend setup
-
-1. Install dependencies:
-   `cd frontend && npm install`
-2. Start the Vite dev server:
-   `npm run dev`
-
-Optional:
-
-- `VITE_API_BASE_URL` to point the UI at a non-default backend URL
-
-## Docker
-
-Build and run the full stack:
-
-```bash
-docker compose up --build
-```
-
-Services:
-
-- Backend: `http://localhost:8000`
-- Frontend: `http://localhost:4173`
-
-## Validation summary
-
-The current baseline has been validated with:
-
-- backend compile checks
-- frontend lint
-- frontend production build
-- backend unit and API tests
-- PostgreSQL integration tests
-- a live authenticated workflow covering bootstrap, execution, workflows, metrics, logs, and history
-
-See [VALIDATION_REPORT.md](./VALIDATION_REPORT.md) for the detailed report.
-
-## API surface
-
-- `GET /health`
-- `GET /ready`
-- `GET /auth/status`
-- `POST /auth/bootstrap`
-- `GET /models`
-- `GET /agents`
-- `GET /executions`
-- `POST /execute`
-- `GET /metrics`
-- `GET /logs`
-- `POST /workflows/definitions`
-- `GET /workflows/definitions`
-- `POST /workflows/execute`
-- `GET /workflows/executions`
-
-## Authentication bootstrap
-
-When auth is enabled and no API keys exist yet:
-
-1. call `GET /auth/status`
-2. if `bootstrap_required=true`, call `POST /auth/bootstrap`
-3. send `X-Bootstrap-Token` using `BOOTSTRAP_ADMIN_TOKEN` or `SECRET_KEY`
-4. store the returned API key
-5. use that value as `X-API-Key` for protected endpoints
-
-The frontend already supports this bootstrap and API-key loading flow.
-
-## Multi-agent and multi-model orchestration
-
-The backend now supports:
-
-- multi-agent routing through internal score and execution APIs
-- multi-model selection through a public model catalog
-- agent-specific preferred model profiles
-- workflow execution that uses the same API-driven orchestration path as direct task execution
-
-## Suggested next layers for product teams
-
-- Add tenancy boundaries and identity federation
-- Introduce background jobs for long-running workflows
-- Add CI with lint, build, API smoke tests, and frontend integration tests
-- Add observability, tracing, and deployment automation
+- [LLaMA Integration Notes](./docs/llama_integration.md)

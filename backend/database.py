@@ -134,6 +134,120 @@ class PostgreSQLDatabaseClient:
             Column("completed_at", DateTime(timezone=True), nullable=True),
         )
 
+        self.diagnostic_runs = Table(
+            "diagnostic_runs",
+            self._metadata,
+            _str("id", primary_key=True),
+            _str("status", nullable=False),
+            Column("health", JSON, nullable=True),
+            Column("tests", JSON, nullable=True),
+            Column("issues", JSON, nullable=False),
+            Column("summary", String, nullable=False),
+            Column("created_at", DateTime(timezone=True), nullable=False),
+            Column("completed_at", DateTime(timezone=True), nullable=True),
+        )
+
+        self.users = Table(
+            "users",
+            self._metadata,
+            _str("id", primary_key=True),
+            _str("email", nullable=False),
+            _str("full_name", nullable=True),
+            _str("social_provider", nullable=True),  # google, facebook, etc.
+            _str("social_id", nullable=True),
+            _str("role", nullable=False),  # admin, recruiter, applicant
+            _str("status", nullable=False),  # pending, approved, active, disabled
+            Column("created_at", DateTime(timezone=True), nullable=False),
+            Column("updated_at", DateTime(timezone=True), nullable=False),
+            UniqueConstraint("email", name="uq_users_email"),
+        )
+
+        self.user_sessions = Table(
+            "user_sessions",
+            self._metadata,
+            _str("id", primary_key=True),
+            _str("user_id", nullable=False),
+            _str("token", nullable=False),
+            Column("expires_at", DateTime(timezone=True), nullable=False),
+            Column("created_at", DateTime(timezone=True), nullable=False),
+            UniqueConstraint("token", name="uq_user_sessions_token"),
+        )
+
+        self.user_profiles = Table(
+            "user_profiles",
+            self._metadata,
+            _str("user_id", primary_key=True),
+            Column("resume_data", JSON, nullable=True),
+            Column("onboarding_metadata", JSON, nullable=True),
+            Column("preferences", JSON, nullable=True),
+            Column("embedding", JSON, nullable=True), # Store as JSON/List for now, or use pgvector types
+            Column("updated_at", DateTime(timezone=True), nullable=False),
+        )
+
+        self.job_search_results = Table(
+            "job_search_results",
+            self._metadata,
+            _str("id", primary_key=True),
+            _str("title", nullable=False),
+            _str("company", nullable=False),
+            _str("description", nullable=False),
+            _str("url", nullable=False),
+            Column("source", String, nullable=True),
+            Column("location", String, nullable=True),
+            Column("embedding", JSON, nullable=True),
+            Column("created_at", DateTime(timezone=True), nullable=False),
+        )
+
+        self.resume_analyses = Table(
+            "resume_analyses",
+            self._metadata,
+            _str("id", primary_key=True),
+            _str("title", nullable=False),
+            Column("source_filename", String, nullable=True),
+            Column("resume_text", String, nullable=False),
+            Column("jd_text", String, nullable=True),
+            Column("summary", String, nullable=False),
+            Column("match_score", Integer, nullable=False),
+            Column("suggestions", JSON, nullable=False),
+            Column("ats_keywords", JSON, nullable=False),
+            Column("strengths", JSON, nullable=False),
+            Column("gaps", JSON, nullable=False),
+            Column("recommended_roles", JSON, nullable=False),
+            Column("model_profile", String, nullable=True),
+            Column("created_by", String, nullable=True),
+            Column("created_at", DateTime(timezone=True), nullable=False),
+        )
+
+        self.resume_templates = Table(
+            "resume_templates",
+            self._metadata,
+            _str("id", primary_key=True),
+            _str("name", nullable=False),
+            _str("target_role", nullable=False),
+            _str("style", nullable=False),
+            Column("notes", String, nullable=True),
+            Column("figma_prompt", String, nullable=False),
+            Column("sections", JSON, nullable=False),
+            Column("design_tokens", JSON, nullable=False),
+            Column("preview_markdown", String, nullable=False),
+            Column("model_profile", String, nullable=True),
+            Column("created_by", String, nullable=True),
+            Column("created_at", DateTime(timezone=True), nullable=False),
+        )
+
+        self.career_queries = Table(
+            "career_queries",
+            self._metadata,
+            _str("id", primary_key=True),
+            _str("query_type", nullable=False),
+            Column("query_text", String, nullable=False),
+            Column("sources", JSON, nullable=False),
+            Column("result_count", Integer, nullable=False),
+            Column("metadata", JSON, nullable=True),
+            Column("created_by", String, nullable=True),
+            Column("created_at", DateTime(timezone=True), nullable=False),
+        )
+
     # ── Connection management ────────────────────────────────────────────────
 
     @property
@@ -155,6 +269,9 @@ class PostgreSQLDatabaseClient:
             future=True,
         )
         self._metadata.create_all(self._engine)
+        # Enable pgvector if available
+        with self._engine.begin() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
 
     @property
     def engine(self) -> Engine:
@@ -450,9 +567,143 @@ class PostgreSQLDatabaseClient:
             row = conn.execute(query).mappings().first()
         return _serialize(dict(row)) if row else None
 
+    # ── Diagnostic Runs ──────────────────────────────────────────────────────
+
+    def save_diagnostic_run(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(record)
+        for key in ("created_at", "completed_at"):
+            if isinstance(payload.get(key), str):
+                try:
+                    payload[key] = datetime.fromisoformat(payload[key])
+                except ValueError:
+                    payload[key] = None
+        valid_columns = set(self.diagnostic_runs.c.keys())
+        payload = {k: v for k, v in payload.items() if k in valid_columns}
+        with self.engine.begin() as conn:
+            conn.execute(insert(self.diagnostic_runs).values(**payload))
+        return record
+
+    def list_diagnostic_runs(self, limit: int = 10) -> List[Dict[str, Any]]:
+        query = (
+            select(self.diagnostic_runs)
+            .order_by(self.diagnostic_runs.c.created_at.desc())
+            .limit(limit)
+        )
+        with self.engine.connect() as conn:
+            rows = conn.execute(query).mappings().all()
+        return [_serialize(dict(r)) for r in rows]
+
     def reset_all(self) -> None:
         self._metadata.drop_all(self.engine)
         self._metadata.create_all(self.engine)
+
+    # ── Resume analyses ─────────────────────────────────────────────────────
+
+    def save_resume_analysis(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(record)
+        if isinstance(payload.get("created_at"), str):
+            payload["created_at"] = datetime.fromisoformat(payload["created_at"])
+        valid_columns = set(self.resume_analyses.c.keys())
+        payload = {key: value for key, value in payload.items() if key in valid_columns}
+        with self.engine.begin() as conn:
+            conn.execute(insert(self.resume_analyses).values(**payload))
+        return _serialize(payload)
+
+    def list_resume_analyses(self, limit: int = 20) -> List[Dict[str, Any]]:
+        query = (
+            select(self.resume_analyses)
+            .order_by(self.resume_analyses.c.created_at.desc())
+            .limit(limit)
+        )
+        with self.engine.connect() as conn:
+            rows = conn.execute(query).mappings().all()
+        return [_serialize(dict(r)) for r in rows]
+
+    # ── Resume templates ────────────────────────────────────────────────────
+
+    def save_resume_template(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(record)
+        if isinstance(payload.get("created_at"), str):
+            payload["created_at"] = datetime.fromisoformat(payload["created_at"])
+        valid_columns = set(self.resume_templates.c.keys())
+        payload = {key: value for key, value in payload.items() if key in valid_columns}
+        with self.engine.begin() as conn:
+            conn.execute(insert(self.resume_templates).values(**payload))
+        return _serialize(payload)
+
+    def list_resume_templates(self, limit: int = 50) -> List[Dict[str, Any]]:
+        query = (
+            select(self.resume_templates)
+            .order_by(self.resume_templates.c.created_at.desc())
+            .limit(limit)
+        )
+        with self.engine.connect() as conn:
+            rows = conn.execute(query).mappings().all()
+        return [_serialize(dict(r)) for r in rows]
+
+    # ── Career queries / analytics ──────────────────────────────────────────
+
+    def save_career_query(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(record)
+        if isinstance(payload.get("created_at"), str):
+            payload["created_at"] = datetime.fromisoformat(payload["created_at"])
+        valid_columns = set(self.career_queries.c.keys())
+        payload = {key: value for key, value in payload.items() if key in valid_columns}
+        with self.engine.begin() as conn:
+            conn.execute(insert(self.career_queries).values(**payload))
+        return _serialize(payload)
+
+    def save_job_search_results(self, records: List[Dict[str, Any]]) -> None:
+        if not records:
+            return
+        valid_columns = set(self.job_search_results.c.keys())
+        payloads = []
+        for record in records:
+            payload = {key: value for key, value in record.items() if key in valid_columns}
+            if isinstance(payload.get("created_at"), str):
+                payload["created_at"] = datetime.fromisoformat(payload["created_at"])
+            payloads.append(payload)
+        with self.engine.begin() as conn:
+            conn.execute(insert(self.job_search_results), payloads)
+
+    def get_career_analytics(self) -> Dict[str, Any]:
+        with self.engine.connect() as conn:
+            total_resume_analyses = conn.execute(
+                select(text("count(*)")).select_from(self.resume_analyses)
+            ).scalar_one()
+            total_templates = conn.execute(
+                select(text("count(*)")).select_from(self.resume_templates)
+            ).scalar_one()
+            total_job_queries = conn.execute(
+                select(text("count(*)")).select_from(self.career_queries)
+            ).scalar_one()
+            total_job_results = conn.execute(
+                select(text("count(*)")).select_from(self.job_search_results)
+            ).scalar_one()
+            avg_match_score = conn.execute(
+                select(text("coalesce(avg(match_score), 0)")).select_from(self.resume_analyses)
+            ).scalar_one()
+
+            source_rows = conn.execute(
+                text(
+                    "SELECT source, COUNT(*) AS count "
+                    "FROM job_search_results "
+                    "WHERE source IS NOT NULL "
+                    "GROUP BY source "
+                    "ORDER BY count DESC "
+                    "LIMIT 10"
+                )
+            ).mappings().all()
+            sources = {row["source"]: int(row["count"]) for row in source_rows}
+
+        return {
+            "total_resume_analyses": int(total_resume_analyses or 0),
+            "total_templates": int(total_templates or 0),
+            "total_job_queries": int(total_job_queries or 0),
+            "total_job_results": int(total_job_results or 0),
+            "average_match_score": round(float(avg_match_score or 0.0), 2),
+            "top_sources": sources,
+        }
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

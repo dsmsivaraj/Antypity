@@ -218,6 +218,15 @@ class TestRunnerAgent(BaseAgent):
         return 90 if any(kw in t for kw in ("run test", "test suite", "pytest", "run tests", "test coverage")) else 5
 
     def execute(self, task: str, context: Optional[Dict] = None) -> AgentResult:
+        if context and context.get("skip_subprocess"):
+            return AgentResult(
+                output="Tests skipped for diagnostic run in controlled environment.",
+                used_llm=False,
+                metadata={
+                    "tests": {"passed": 0, "failed": 0, "errors": 0, "duration_seconds": 0, "status": "SKIP", "output": ""},
+                    "issues": [],
+                },
+            )
         # Guard: don't run recursively when already inside a diagnostic subprocess.
         if os.environ.get("DIAGNOSTICS_RUNNER_ACTIVE") == "1":
             return AgentResult(

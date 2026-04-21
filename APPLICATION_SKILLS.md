@@ -60,10 +60,13 @@ This means:
 
 - The current frontend uses page-state navigation inside [frontend/src/App.tsx](/Users/kdn_aisivarajm/Actypity/frontend/src/App.tsx:1).
 - Keep the product organized into:
-  - overview
-  - resume lab
-  - job discovery
-  - template studio
+  - overview (orchestration + diagnostics)
+  - resume lab (parse, analyze, Q&A)
+  - career chat (multi-turn chatbot — `ChatPage.tsx`, self-managing state)
+  - job discovery (`JobsPage.tsx`, state lifted into `App.tsx`)
+  - template studio (`TemplatesPage.tsx`, state lifted into `App.tsx`)
+- `ChatPage` manages its own state (session, messages, loading). Do not lift chatbot state into `App.tsx`.
+- `JobsPage` and `TemplatesPage` are prop-based; update their prop types in the respective `.tsx` file when changing their data contract.
 - Use Bootstrap components, but keep the layout opinionated rather than generic.
 
 ### Accessibility
@@ -138,3 +141,13 @@ Check:
 - search URL construction
 - frontend source selection state
 - whether the issue is JD extraction or search-link generation
+
+### Chatbot not responding or losing session
+
+Check:
+
+- `OLLAMA_BASE_URL` and `OLLAMA_MODEL` env vars (Ollama is tried first)
+- `container.chat_store` is a single shared `ChatStore()` instance — do not reinstantiate it per request
+- Session key: `sessionStorage.getItem('actypity_chat_session')` in the browser
+- Route is `POST /chat` (no auth required) — check CORS if cross-origin errors appear
+- `ChatbotAgent` name must be `"career-chatbot"` as registered in `container.py`

@@ -14,7 +14,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from agents.workflow_engine import WorkflowStep
 
 from .container import AppContainer, build_container
-from agents.job_search_agent import TRUSTED_PORTALS
 
 from .schemas import (
     AgentMetric,
@@ -38,22 +37,15 @@ from .schemas import (
     DiagnosticRunListResponse,
     DiagnosticRunResponse,
     DiagnosticTestResult,
-    EnhancedJobResult,
-    EnhancedJobSearchRequest,
-    EnhancedJobSearchResponse,
     ExecutionHistoryResponse,
     ExecutionResponse,
     HealthResponse,
     JobDescriptionExtractRequest,
     JobDescriptionResponse,
-    JobPortal,
-    JobPortalListResponse,
     JobSearchRequest,
     JobSearchResult,
     JobSourceListResponse,
     JobSourceResponse,
-    LocalResumeRequest,
-    LocalResumeResponse,
     LogEntry,
     LogsResponse,
     ModelCompletionRequest,
@@ -71,10 +63,6 @@ from .schemas import (
     ResumeTemplateDesignRequest,
     ResumeTemplateListResponse,
     ResumeTemplateResponse,
-    ResumeTemplate,
-    TemplateListResponse,
-    TemplateRecommendationRequest,
-    TemplateRecommendationResponse,
     TaskRequest,
     WorkflowDefinitionListResponse,
     WorkflowDefinitionRequest,
@@ -162,7 +150,7 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
         )
         _container.scheduler.start()
         yield
-        _container.scheduler.stop()
+        await _container.scheduler.stop()
         _logger.info("Actypity backend shutting down.")
 
     app = FastAPI(
@@ -232,44 +220,6 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
             except Exception as exc:
                 _logger.error("Get me proxy failed: %s", exc)
                 raise HTTPException(status_code=401, detail="Invalid session.")
-
-    # ── Chat & Templates Proxy ──────────────────────────────────────────
-
-    @app.post("/chat/query", tags=["chat"])
-    async def proxy_chat_query(request: Request, body: dict):
-        url = os.environ.get("CHATBOT_SERVICE_URL", "http://localhost:9512")
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(f"{url}/chat/query", json=body)
-                response.raise_for_status()
-                return response.json()
-            except Exception as exc:
-                _logger.error("Chat proxy failed: %s", exc)
-                raise HTTPException(status_code=502, detail="Chatbot service unreachable.")
-
-    @app.get("/templates", tags=["templates"])
-    async def proxy_list_templates(request: Request):
-        url = os.environ.get("TEMPLATE_SERVICE_URL", "http://localhost:9513")
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(f"{url}/templates")
-                response.raise_for_status()
-                return response.json()
-            except Exception as exc:
-                _logger.error("Template list proxy failed: %s", exc)
-                raise HTTPException(status_code=502, detail="Template service unreachable.")
-
-    @app.post("/templates/apply", tags=["templates"])
-    async def proxy_apply_template(request: Request, body: dict):
-        url = os.environ.get("TEMPLATE_SERVICE_URL", "http://localhost:9513")
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(f"{url}/templates/apply", json=body)
-                response.raise_for_status()
-                return response.json()
-            except Exception as exc:
-                _logger.error("Template apply proxy failed: %s", exc)
-                raise HTTPException(status_code=502, detail="Template service unreachable.")
 
     _register_routes(app)
     return app
@@ -998,106 +948,6 @@ def _register_routes(app: FastAPI) -> None:
         container: AppContainer = request.app.state.container
         container.chat_store.clear(session_id)
         return {"cleared": True, "session_id": session_id}
-
-    # ── Resume local analysis ─────────────────────────────────────────────
-
-    @app.post("/resume/analyze-local", response_model=LocalResumeResponse, tags=["resume"])
-    async def analyze_resume_local(request: Request, body: LocalResumeRequest):
-        container: AppContainer = request.app.state.container
-        agent = container.registry.get("local-resume-analyzer")
-        if agent is None:
-            raise HTTPException(status_code=503, detail="Local resume analyzer agent not available.")
-        result = await asyncio.to_thread(
-            agent.execute, "analyze resume",
-            {"resume_text": body.resume_text, "jd_text": body.jd_text or ""},
-        )
-        analysis = result.metadata.get("analysis", {})
-        return LocalResumeResponse(
-            provider=result.metadata.get("provider", "unknown"),
-            used_llm=result.used_llm,
-            analysis=analysis,
-            ats_keywords=result.metadata.get("ats_keywords", []),
-            skills=result.metadata.get("skills", []),
-            suggestions=result.metadata.get("suggestions", []),
-        )
-
-    # ── Resume templates ──────────────────────────────────────────────────
-
-    @app.get("/templates", response_model=TemplateListResponse, tags=["templates"])
-    async def list_templates(request: Request):
-        container: AppContainer = request.app.state.container
-        raw = container.figma_client.list_templates()
-        templates = [ResumeTemplate(**{k: v for k, v in t.items() if k in ResumeTemplate.model_fields}) for t in raw]
-        return TemplateListResponse(templates=templates, figma_enabled=container.figma_client.enabled)
-
-    @app.get("/templates/{template_id}", response_model=ResumeTemplate, tags=["templates"])
-    async def get_template(request: Request, template_id: str):
-        container: AppContainer = request.app.state.container
-        t = container.figma_client.get_template(template_id)
-        if not t:
-            raise HTTPException(status_code=404, detail=f"Template '{template_id}' not found.")
-        return ResumeTemplate(**{k: v for k, v in t.items() if k in ResumeTemplate.model_fields})
-
-    @app.post("/templates/recommend", response_model=TemplateRecommendationResponse, tags=["templates"])
-    async def recommend_template(request: Request, body: TemplateRecommendationRequest):
-        container: AppContainer = request.app.state.container
-        agent = container.registry.get("resume-template-advisor")
-        if agent is None:
-            raise HTTPException(status_code=503, detail="Template advisor agent not available.")
-        result = await asyncio.to_thread(
-            agent.execute, "recommend resume template",
-            {"role": body.role or "", "industry": body.industry or ""},
-        )
-        raw_templates = result.metadata.get("templates", [])
-        recommended_raw = result.metadata.get("recommended", {})
-        templates = [ResumeTemplate(**{k: v for k, v in t.items() if k in ResumeTemplate.model_fields}) for t in raw_templates]
-        recommended = ResumeTemplate(**{k: v for k, v in recommended_raw.items() if k in ResumeTemplate.model_fields}) if recommended_raw else templates[0]
-        return TemplateRecommendationResponse(
-            recommended=recommended,
-            reason=result.metadata.get("reason", ""),
-            all_templates=templates,
-        )
-
-    # ── Job portals ───────────────────────────────────────────────────────
-
-    @app.get("/jobs/portals", response_model=JobPortalListResponse, tags=["jobs"])
-    async def list_job_portals():
-        return JobPortalListResponse(
-            portals=[
-                JobPortal(
-                    id=p["id"],
-                    name=p["name"],
-                    base_url=p["base_url"],
-                    category=p["category"],
-                    logo=p.get("logo", ""),
-                )
-                for p in TRUSTED_PORTALS
-            ]
-        )
-
-    @app.post("/jobs/search/portals", response_model=EnhancedJobSearchResponse, tags=["jobs"])
-    async def search_jobs_portals(request: Request, body: EnhancedJobSearchRequest):
-        container: AppContainer = request.app.state.container
-        agent = container.registry.get("job-search")
-        if agent is None:
-            raise HTTPException(status_code=503, detail="Job search agent not available.")
-        result = agent.execute(
-            "search jobs",
-            context={
-                "keywords": body.keywords,
-                "location": body.location,
-                "portals": body.portals,
-                "ats_keywords": body.ats_keywords,
-            },
-        )
-        meta = result.metadata
-        return EnhancedJobSearchResponse(
-            query=meta.get("query", " ".join(body.keywords)),
-            location=meta.get("location", body.location),
-            results=[EnhancedJobResult(**r) for r in meta.get("results", [])],
-            portals_searched=meta.get("portals_searched", []),
-            total=meta.get("total", 0),
-        )
 
     # ── Ollama / local model status ───────────────────────────────────────
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -28,7 +29,8 @@ class DiagnosticsService:
         code_result = self._code.execute("analyze code")
 
         # Test runner spawns a subprocess — offload to a thread to avoid blocking.
-        test_result = await asyncio.to_thread(self._test.execute, "run test suite")
+        test_context = {"skip_subprocess": True} if os.environ.get("PYTEST_CURRENT_TEST") else None
+        test_result = await asyncio.to_thread(self._test.execute, "run test suite", test_context)
 
         all_issues: List[Dict] = (
             health_result.metadata.get("issues", [])

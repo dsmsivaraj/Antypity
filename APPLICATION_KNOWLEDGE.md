@@ -56,12 +56,19 @@ Primary frontend files:
 - [frontend/src/types.ts](/Users/kdn_aisivarajm/Actypity/frontend/src/types.ts:1)
 - [frontend/src/App.css](/Users/kdn_aisivarajm/Actypity/frontend/src/App.css:1)
 
-The current frontend is a Bootstrap application with four main pages implemented through page-state navigation:
+The current frontend is a Bootstrap application with five main pages implemented through page-state navigation:
 
-- `overview`
-- `resume`
-- `jobs`
-- `templates`
+- `overview` — agent orchestration console, diagnostics, metrics
+- `resume` — resume upload/parse, ATS analysis, resume Q&A
+- `chat` — multi-turn AI career coaching chatbot with session context
+- `jobs` — JD extraction, multi-portal job search link generation
+- `templates` — resume template browser and AI template design studio
+
+Page components:
+- `OverviewPage`, `ResumePage` — inline in `App.tsx`
+- `ChatPage` — `frontend/src/ChatPage.tsx`
+- `JobsPage` — `frontend/src/JobsPage.tsx` (prop-based, state in `App.tsx`)
+- `TemplatesPage` — `frontend/src/TemplatesPage.tsx` (prop-based, state in `App.tsx`)
 
 ## Model architecture
 
@@ -192,6 +199,11 @@ Career:
 - `GET /tracker/analytics`
 - `POST /chat`
 - `GET /chat/history/{session_id}`
+- `DELETE /chat/session/{session_id}`
+
+Local model:
+
+- `GET /ollama/status`
 
 ## Implementation constraints
 

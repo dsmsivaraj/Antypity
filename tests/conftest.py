@@ -163,7 +163,8 @@ def container(
 @pytest.fixture()
 def client(container: AppContainer) -> TestClient:
     app = create_app(container=container)
-    return TestClient(app)
+    with TestClient(app) as test_client:
+        yield test_client
 
 
 @pytest.fixture()

@@ -15,7 +15,6 @@ from agents.diagnostics_agent import (
     TestRunnerAgent,
 )
 from agents.example_agent import GeneralistAgent, MathAgent, PlannerAgent, ReviewerAgent
-from agents.llama_resume_agent import LlamaResumeAgent
 from agents.job_search_agent import EnhancedJobSearchAgent
 from agents.resume_agent import LocalJDAgent, LocalResumeAgent, ResumeTemplateAgent
 from agents.workflow_engine import WorkflowExecutor
@@ -99,7 +98,6 @@ def build_container() -> AppContainer:
     registry.register(PlannerAgent(llm_client=llm_client, skills=common_skills))
     registry.register(ReviewerAgent(llm_client=llm_client, skills=common_skills))
     registry.register(MathAgent(skills=common_skills))
-    registry.register(LlamaResumeAgent(llm_client=llm_client, skills=common_skills))
 
     # Local Llama / Ollama-powered agents
     registry.register(LocalResumeAgent(ollama_client=ollama_client))

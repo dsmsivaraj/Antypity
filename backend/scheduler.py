@@ -19,9 +19,13 @@ class DiagnosticsScheduler:
             self._task = asyncio.create_task(self._loop())
             _logger.info("DiagnosticsScheduler started (interval=%ds).", self._interval)
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         if self._task and not self._task.done():
             self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
             _logger.info("DiagnosticsScheduler stopped.")
 
     async def _loop(self) -> None:

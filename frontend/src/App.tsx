@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import './App.css'
 import { api, getStoredApiKey, setStoredApiKey } from './api'
 import { ChatPage } from './ChatPage'
+import { JobsPage } from './JobsPage'
+import { TemplatesPage } from './TemplatesPage'
 import type {
   AgentSummary,
   ApiKeyCreateResponse,
@@ -280,8 +282,7 @@ function App() {
     }
   }
 
-  async function handleExtractJob(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
+  async function handleExtractJob() {
     setLoading(true)
     setSubmitError('')
     try {
@@ -298,8 +299,11 @@ function App() {
     }
   }
 
-  async function handleSearchJobs(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
+  async function handleSearchJobs() {
+    if (!parseCsv(jobKeywords).length) {
+      setSubmitError('Add at least one job keyword before searching.')
+      return
+    }
     setLoading(true)
     setSubmitError('')
     try {
@@ -318,8 +322,7 @@ function App() {
     }
   }
 
-  async function handleDesignTemplate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
+  async function handleDesignTemplate() {
     setLoading(true)
     setSubmitError('')
     try {
@@ -935,292 +938,6 @@ function ResumePage(props: {
                 </div>
               </div>
             ) : null}
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function JobsPage(props: {
-  jobExtractUrl: string
-  setJobExtractUrl: (value: string) => void
-  jdText: string
-  setJdText: (value: string) => void
-  extractedJob: JobDescriptionResponse | null
-  handleExtractJob: (event: FormEvent<HTMLFormElement>) => Promise<void>
-  jobKeywords: string
-  setJobKeywords: (value: string) => void
-  jobLocations: string
-  setJobLocations: (value: string) => void
-  selectedSources: string[]
-  jobSources: JobSource[]
-  toggleSource: (sourceId: string) => void
-  handleSearchJobs: (event: FormEvent<HTMLFormElement>) => Promise<void>
-  jobMatches: JobSearchResult[]
-}) {
-  return (
-    <div className="row g-4">
-      <div className="col-xl-5">
-        <div className="card glass-card border-0 rounded-4 h-100">
-          <div className="card-body p-4">
-            <div className="text-uppercase small text-secondary fw-semibold">Trusted sources</div>
-            <h2 className="section-title h4 mb-3">Extract a job description</h2>
-            <form onSubmit={props.handleExtractJob}>
-              <div className="mb-3">
-                <label htmlFor="job-url-input" className="form-label">Trusted portal URL</label>
-                <input
-                  id="job-url-input"
-                  className="form-control"
-                  type="url"
-                  value={props.jobExtractUrl}
-                  onChange={(event) => props.setJobExtractUrl(event.target.value)}
-                  placeholder="https://www.linkedin.com/jobs/view/..."
-                />
-              </div>
-              <div className="mb-3">
-                <label htmlFor="job-text-input" className="form-label">Or paste job description text</label>
-                <textarea
-                  id="job-text-input"
-                  className="form-control"
-                  rows={10}
-                  value={props.jdText}
-                  onChange={(event) => props.setJdText(event.target.value)}
-                  placeholder="Paste JD text here when you do not have a trusted portal URL."
-                />
-              </div>
-              <button type="submit" className="btn btn-primary">Extract JD</button>
-            </form>
-          </div>
-        </div>
-      </div>
-
-      <div className="col-xl-7">
-        <div className="card glass-card border-0 rounded-4 h-100">
-          <div className="card-body p-4">
-            <div className="text-uppercase small text-secondary fw-semibold">Extracted JD</div>
-            <h2 className="section-title h4 mb-3">Role details</h2>
-            {props.extractedJob ? (
-              <>
-                <div className="d-flex flex-wrap gap-2 mb-3">
-                  <span className="badge text-bg-primary">{props.extractedJob.source_type}</span>
-                  <span className="badge text-bg-light border">{props.extractedJob.company}</span>
-                </div>
-                <h3 className="h5">{props.extractedJob.title}</h3>
-                <p className="text-secondary">{props.extractedJob.description.slice(0, 1200)}{props.extractedJob.description.length > 1200 ? '…' : ''}</p>
-                <div className="d-flex flex-wrap gap-2">
-                  {props.extractedJob.keywords.map((keyword) => (
-                    <span key={keyword} className="badge bg-primary-subtle text-primary-emphasis border">{keyword}</span>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <div className="text-secondary">Use a trusted URL or paste JD text to normalize and extract role keywords.</div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div className="col-12">
-        <div className="card glass-card border-0 rounded-4">
-          <div className="card-body p-4">
-            <div className="text-uppercase small text-secondary fw-semibold">Portal discovery</div>
-            <h2 className="section-title h4 mb-3">Search trusted job portals</h2>
-            <form onSubmit={props.handleSearchJobs}>
-              <div className="row g-3">
-                <div className="col-lg-5">
-                  <label htmlFor="job-keywords-input" className="form-label">Keywords</label>
-                  <input
-                    id="job-keywords-input"
-                    className="form-control"
-                    type="text"
-                    value={props.jobKeywords}
-                    onChange={(event) => props.setJobKeywords(event.target.value)}
-                    placeholder="react, fastapi, genai, frontend"
-                  />
-                </div>
-                <div className="col-lg-3">
-                  <label htmlFor="job-locations-input" className="form-label">Locations</label>
-                  <input
-                    id="job-locations-input"
-                    className="form-control"
-                    type="text"
-                    value={props.jobLocations}
-                    onChange={(event) => props.setJobLocations(event.target.value)}
-                    placeholder="Remote, Bengaluru"
-                  />
-                </div>
-                <div className="col-lg-4">
-                  <label className="form-label">Sources</label>
-                  <div className="d-flex flex-wrap gap-2">
-                    {props.jobSources.map((source) => (
-                      <button
-                        key={source.id}
-                        type="button"
-                        className={`btn btn-sm ${props.selectedSources.includes(source.id) ? 'btn-primary' : 'btn-outline-primary'}`}
-                        onClick={() => props.toggleSource(source.id)}
-                      >
-                        {source.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              <button type="submit" className="btn btn-outline-primary mt-3">Generate trusted search links</button>
-            </form>
-
-            <div className="row g-3 mt-1">
-              {props.jobMatches.map((job) => (
-                <div className="col-lg-6" key={job.id}>
-                  <div className="border rounded-4 p-3 h-100 bg-white">
-                    <div className="d-flex justify-content-between align-items-start gap-3">
-                      <div>
-                        <div className="fw-semibold">{job.title}</div>
-                        <div className="small text-secondary">{job.company} • {job.location}</div>
-                      </div>
-                      <span className="badge text-bg-light border">{job.source}</span>
-                    </div>
-                    <p className="small text-secondary mt-3 mb-3">{job.summary}</p>
-                    <a href={job.url} target="_blank" rel="noreferrer" className="btn btn-sm btn-primary">
-                      Open source
-                    </a>
-                  </div>
-                </div>
-              ))}
-              {!props.jobMatches.length ? (
-                <div className="col-12 text-secondary">Search links from trusted portals will appear here.</div>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function TemplatesPage(props: {
-  templates: ResumeTemplate[]
-  templateName: string
-  setTemplateName: (value: string) => void
-  templateRole: string
-  setTemplateRole: (value: string) => void
-  templateStyle: string
-  setTemplateStyle: (value: string) => void
-  templateNotes: string
-  setTemplateNotes: (value: string) => void
-  handleDesignTemplate: (event: FormEvent<HTMLFormElement>) => Promise<void>
-  generatedTemplate: ResumeTemplate | null
-  loading: boolean
-}) {
-  return (
-    <div className="row g-4">
-      <div className="col-xl-5">
-        <div className="card glass-card border-0 rounded-4 h-100">
-          <div className="card-body p-4">
-            <div className="text-uppercase small text-secondary fw-semibold">Template Studio</div>
-            <h2 className="section-title h4 mb-3">Design a new resume template</h2>
-            <form onSubmit={props.handleDesignTemplate}>
-              <div className="mb-3">
-                <label htmlFor="template-name-input" className="form-label">Template name</label>
-                <input
-                  id="template-name-input"
-                  className="form-control"
-                  value={props.templateName}
-                  onChange={(event) => props.setTemplateName(event.target.value)}
-                />
-              </div>
-              <div className="mb-3">
-                <label htmlFor="template-role-input" className="form-label">Target role</label>
-                <input
-                  id="template-role-input"
-                  className="form-control"
-                  value={props.templateRole}
-                  onChange={(event) => props.setTemplateRole(event.target.value)}
-                />
-              </div>
-              <div className="mb-3">
-                <label htmlFor="template-style-input" className="form-label">Visual style</label>
-                <input
-                  id="template-style-input"
-                  className="form-control"
-                  value={props.templateStyle}
-                  onChange={(event) => props.setTemplateStyle(event.target.value)}
-                  placeholder="bold editorial / executive minimal / modern modular"
-                />
-              </div>
-              <div className="mb-3">
-                <label htmlFor="template-notes-input" className="form-label">Figma notes</label>
-                <textarea
-                  id="template-notes-input"
-                  className="form-control"
-                  rows={6}
-                  value={props.templateNotes}
-                  onChange={(event) => props.setTemplateNotes(event.target.value)}
-                />
-              </div>
-              <button type="submit" className="btn btn-primary" disabled={props.loading}>
-                {props.loading ? 'Designing…' : 'Generate Figma-ready brief'}
-              </button>
-            </form>
-          </div>
-        </div>
-      </div>
-
-      <div className="col-xl-7">
-        <div className="card glass-card border-0 rounded-4 h-100">
-          <div className="card-body p-4">
-            <div className="text-uppercase small text-secondary fw-semibold">Generated brief</div>
-            <h2 className="section-title h4 mb-3">Figma handoff</h2>
-            {props.generatedTemplate ? (
-              <>
-                <div className="d-flex flex-wrap gap-2 mb-3">
-                  <span className="badge text-bg-primary">{props.generatedTemplate.style}</span>
-                  <span className="badge text-bg-light border">{props.generatedTemplate.target_role}</span>
-                </div>
-                <div className="border rounded-4 p-3 bg-body-tertiary mb-3">
-                  {props.generatedTemplate.figma_prompt}
-                </div>
-                <div className="row g-3">
-                  <InsightList title="Sections" items={props.generatedTemplate.sections} />
-                  <InsightList title="Design tokens" items={Object.entries(props.generatedTemplate.design_tokens).map(([key, value]) => `${key}: ${value}`)} />
-                </div>
-                <pre className="code-block bg-body-tertiary rounded-4 p-3 mt-3 mb-0">
-                  {props.generatedTemplate.preview_markdown}
-                </pre>
-              </>
-            ) : (
-              <div className="text-secondary">Generate a template to produce sections, design tokens, and a Figma-ready brief.</div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div className="col-12">
-        <div className="card glass-card border-0 rounded-4">
-          <div className="card-body p-4">
-            <div className="text-uppercase small text-secondary fw-semibold">Catalog</div>
-            <h2 className="section-title h4 mb-3">Available resume templates</h2>
-            <div className="row g-3">
-              {props.templates.map((template) => (
-                <div className="col-lg-6 col-xl-4" key={template.id}>
-                  <div className="border rounded-4 p-3 h-100 bg-white">
-                    <div className="d-flex justify-content-between align-items-start gap-3">
-                      <div>
-                        <div className="fw-semibold">{template.name}</div>
-                        <div className="small text-secondary">{template.target_role}</div>
-                      </div>
-                      <span className="badge text-bg-light border">{template.source}</span>
-                    </div>
-                    <div className="small text-secondary mt-3 mb-3">{template.style}</div>
-                    <div className="d-flex flex-wrap gap-2">
-                      {template.sections.slice(0, 4).map((section) => (
-                        <span key={section} className="badge bg-primary-subtle text-primary-emphasis border">{section}</span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
           </div>
         </div>
       </div>

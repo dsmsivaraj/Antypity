@@ -119,18 +119,31 @@ class ChatStore:
 
     def add_message(self, session_id: str, role: str, content: str) -> None:
         from datetime import datetime, timezone
-        session = self.get_or_create(session_id)
         with self._lock:
+            session = self._sessions.setdefault(session_id, {
+                "session_id": session_id,
+                "messages": [],
+                "context": {},
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
+            now = datetime.now(timezone.utc).isoformat()
             session["messages"].append({
                 "role": role,
                 "content": content,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": now,
             })
-            session["updated_at"] = datetime.now(timezone.utc).isoformat()
+            session["updated_at"] = now
 
     def update_context(self, session_id: str, **kwargs: Any) -> None:
-        session = self.get_or_create(session_id)
         with self._lock:
+            session = self._sessions.setdefault(session_id, {
+                "session_id": session_id,
+                "messages": [],
+                "context": {},
+                "created_at": "",
+                "updated_at": "",
+            })
             session["context"].update(kwargs)
 
     def get_history(self, session_id: str) -> List[Dict[str, Any]]:

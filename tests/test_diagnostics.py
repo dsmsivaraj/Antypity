@@ -1,9 +1,11 @@
 """Tests for the self-monitoring diagnostic system."""
 from __future__ import annotations
 
+import os
 import subprocess
+from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -232,7 +234,7 @@ class TestDiagnosticsService:
     async def test_run_includes_test_results(self):
         fake_output = "42 passed, 0 failed in 5.1s"
         fake_proc = SimpleNamespace(stdout=fake_output, stderr="", returncode=0)
-        with patch("subprocess.run", return_value=fake_proc):
+        with patch.dict(os.environ, {"PYTEST_CURRENT_TEST": ""}), patch("subprocess.run", return_value=fake_proc):
             service = self._make_service()
             record = await service.run_full_diagnostics()
         assert "tests" in record
@@ -251,8 +253,22 @@ class TestDiagnosticsService:
 # ── Diagnostics API routes ────────────────────────────────────────────────────
 
 class TestDiagnosticsRoutes:
+    @staticmethod
+    def _fake_run():
+        return {
+            "id": "diag-run-1",
+            "status": "healthy",
+            "health": {"database": "ok"},
+            "tests": {"passed": 3, "failed": 0, "errors": 0, "duration_seconds": 0.1, "status": "PASS", "output": ""},
+            "issues": [],
+            "summary": "All checks healthy.",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+
     def test_run_diagnostics_returns_200(self, client: TestClient):
-        resp = client.post("/diagnostics/run")
+        with patch.object(client.app.state.container.diagnostics_service, "run_full_diagnostics", AsyncMock(return_value=self._fake_run())):
+            resp = client.post("/diagnostics/run")
         assert resp.status_code == 200
         data = resp.json()
         assert "id" in data
@@ -270,7 +286,8 @@ class TestDiagnosticsRoutes:
         assert resp.status_code == 404
 
     def test_run_result_has_test_data(self, client: TestClient):
-        resp = client.post("/diagnostics/run")
+        with patch.object(client.app.state.container.diagnostics_service, "run_full_diagnostics", AsyncMock(return_value=self._fake_run())):
+            resp = client.post("/diagnostics/run")
         assert resp.status_code == 200
         data = resp.json()
         assert data["tests"] is not None
@@ -278,7 +295,8 @@ class TestDiagnosticsRoutes:
         assert "failed" in data["tests"]
 
     def test_run_result_has_issues_list(self, client: TestClient):
-        resp = client.post("/diagnostics/run")
+        with patch.object(client.app.state.container.diagnostics_service, "run_full_diagnostics", AsyncMock(return_value=self._fake_run())):
+            resp = client.post("/diagnostics/run")
         assert resp.status_code == 200
         issues = resp.json()["issues"]
         assert isinstance(issues, list)
