@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -7,12 +8,14 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from agents.workflow_engine import WorkflowStep
 
 from .container import AppContainer, build_container
+from agents.job_search_agent import TRUSTED_PORTALS
+
 from .schemas import (
     AgentMetric,
     AgentExecutionRequest,
@@ -26,13 +29,31 @@ from .schemas import (
     ApiKeyListResponse,
     ApiKeyResponse,
     AuthStatusResponse,
+    CareerAnalyticsResponse,
+    ChatHistoryResponse,
+    ChatMessage,
+    ChatRequest,
+    ChatResponse,
     DiagnosticIssue,
     DiagnosticRunListResponse,
     DiagnosticRunResponse,
     DiagnosticTestResult,
+    EnhancedJobResult,
+    EnhancedJobSearchRequest,
+    EnhancedJobSearchResponse,
     ExecutionHistoryResponse,
     ExecutionResponse,
     HealthResponse,
+    JobDescriptionExtractRequest,
+    JobDescriptionResponse,
+    JobPortal,
+    JobPortalListResponse,
+    JobSearchRequest,
+    JobSearchResult,
+    JobSourceListResponse,
+    JobSourceResponse,
+    LocalResumeRequest,
+    LocalResumeResponse,
     LogEntry,
     LogsResponse,
     ModelCompletionRequest,
@@ -40,7 +61,20 @@ from .schemas import (
     ModelListResponse,
     ModelSummary,
     MetricsResponse,
+    OllamaStatusResponse,
     ReadyResponse,
+    ResumeAnalyzeRequest,
+    ResumeAnalysisResponse,
+    ResumeChatRequest,
+    ResumeChatResponse,
+    ResumeParseResponse,
+    ResumeTemplateDesignRequest,
+    ResumeTemplateListResponse,
+    ResumeTemplateResponse,
+    ResumeTemplate,
+    TemplateListResponse,
+    TemplateRecommendationRequest,
+    TemplateRecommendationResponse,
     TaskRequest,
     WorkflowDefinitionListResponse,
     WorkflowDefinitionRequest,
@@ -198,6 +232,44 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
             except Exception as exc:
                 _logger.error("Get me proxy failed: %s", exc)
                 raise HTTPException(status_code=401, detail="Invalid session.")
+
+    # ── Chat & Templates Proxy ──────────────────────────────────────────
+
+    @app.post("/chat/query", tags=["chat"])
+    async def proxy_chat_query(request: Request, body: dict):
+        url = os.environ.get("CHATBOT_SERVICE_URL", "http://localhost:9512")
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(f"{url}/chat/query", json=body)
+                response.raise_for_status()
+                return response.json()
+            except Exception as exc:
+                _logger.error("Chat proxy failed: %s", exc)
+                raise HTTPException(status_code=502, detail="Chatbot service unreachable.")
+
+    @app.get("/templates", tags=["templates"])
+    async def proxy_list_templates(request: Request):
+        url = os.environ.get("TEMPLATE_SERVICE_URL", "http://localhost:9513")
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(f"{url}/templates")
+                response.raise_for_status()
+                return response.json()
+            except Exception as exc:
+                _logger.error("Template list proxy failed: %s", exc)
+                raise HTTPException(status_code=502, detail="Template service unreachable.")
+
+    @app.post("/templates/apply", tags=["templates"])
+    async def proxy_apply_template(request: Request, body: dict):
+        url = os.environ.get("TEMPLATE_SERVICE_URL", "http://localhost:9513")
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(f"{url}/templates/apply", json=body)
+                response.raise_for_status()
+                return response.json()
+            except Exception as exc:
+                _logger.error("Template apply proxy failed: %s", exc)
+                raise HTTPException(status_code=502, detail="Template service unreachable.")
 
     _register_routes(app)
     return app
@@ -691,6 +763,355 @@ def _register_routes(app: FastAPI) -> None:
         if not record:
             raise HTTPException(status_code=404, detail="No diagnostic reports found. Run POST /diagnostics/run first.")
         return _build_diag_response(record)
+
+    # ── Career features ───────────────────────────────────────────────────
+
+    @app.post("/resume/parse", response_model=ResumeParseResponse, tags=["resume"])
+    async def parse_resume_file(
+        request: Request,
+        file: UploadFile = File(...),
+        _: dict = Depends(_require("execute")),
+    ):
+        container: AppContainer = request.app.state.container
+        content = await file.read()
+        try:
+            parsed = container.career_service.parse_resume(file.filename or "resume.txt", content)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return ResumeParseResponse(
+            filename=parsed.filename,
+            text=parsed.text,
+            metadata=parsed.metadata,
+        )
+
+    @app.post("/resume/analyze", response_model=ResumeAnalysisResponse, tags=["resume"])
+    async def analyze_resume(
+        request: Request,
+        body: ResumeAnalyzeRequest,
+        principal: dict = Depends(_require("execute")),
+    ):
+        container: AppContainer = request.app.state.container
+        record = container.career_service.analyze_resume(
+            resume_text=body.text,
+            jd_text=body.jd_text,
+            model_profile=body.model_profile,
+            source_filename=body.source_filename,
+            created_by=principal.get("name"),
+        )
+        return ResumeAnalysisResponse(
+            id=record.get("id"),
+            title=record["title"],
+            source_filename=record.get("source_filename"),
+            summary=record["summary"],
+            match_score=int(record["match_score"]),
+            suggestions=list(record.get("suggestions") or []),
+            ats_keywords=list(record.get("ats_keywords") or []),
+            strengths=list(record.get("strengths") or []),
+            gaps=list(record.get("gaps") or []),
+            recommended_roles=list(record.get("recommended_roles") or []),
+            model_profile=record.get("model_profile"),
+            used_llm=bool(record.get("used_llm")),
+            provider=record.get("provider"),
+            created_at=(
+                datetime.fromisoformat(record["created_at"])
+                if record.get("created_at")
+                else None
+            ),
+        )
+
+    @app.post("/resume/chat", response_model=ResumeChatResponse, tags=["resume"])
+    async def resume_chat(
+        request: Request,
+        body: ResumeChatRequest,
+        _: dict = Depends(_require("execute")),
+    ):
+        container: AppContainer = request.app.state.container
+        result = container.career_service.chat_resume(
+            question=body.question,
+            resume_text=body.resume_text,
+            jd_text=body.jd_text,
+            model_profile=body.model_profile,
+        )
+        return ResumeChatResponse(**result)
+
+    @app.get("/resume/templates", response_model=ResumeTemplateListResponse, tags=["resume"])
+    async def list_resume_templates(
+        request: Request,
+        _: dict = Depends(_require("agents:read")),
+    ):
+        container: AppContainer = request.app.state.container
+        templates = container.career_service.list_templates()
+        return ResumeTemplateListResponse(
+            templates=[
+                ResumeTemplateResponse(
+                    id=t["id"],
+                    name=t["name"],
+                    target_role=t["target_role"],
+                    style=t["style"],
+                    figma_prompt=t["figma_prompt"],
+                    sections=list(t.get("sections") or []),
+                    design_tokens=dict(t.get("design_tokens") or {}),
+                    preview_markdown=t["preview_markdown"],
+                    source=t.get("source", "generated"),
+                    model_profile=t.get("model_profile"),
+                    created_at=(
+                        datetime.fromisoformat(t["created_at"])
+                        if t.get("created_at")
+                        else None
+                    ),
+                )
+                for t in templates
+            ]
+        )
+
+    @app.post("/resume/templates/design", response_model=ResumeTemplateResponse, tags=["resume"])
+    async def design_resume_template(
+        request: Request,
+        body: ResumeTemplateDesignRequest,
+        principal: dict = Depends(_require("execute")),
+    ):
+        container: AppContainer = request.app.state.container
+        template = container.career_service.design_template(
+            name=body.name,
+            target_role=body.target_role,
+            style=body.style,
+            notes=body.notes,
+            model_profile=body.model_profile,
+            created_by=principal.get("name"),
+        )
+        return ResumeTemplateResponse(
+            id=template["id"],
+            name=template["name"],
+            target_role=template["target_role"],
+            style=template["style"],
+            figma_prompt=template["figma_prompt"],
+            sections=list(template.get("sections") or []),
+            design_tokens=dict(template.get("design_tokens") or {}),
+            preview_markdown=template["preview_markdown"],
+            source=template.get("source", "generated"),
+            model_profile=template.get("model_profile"),
+            created_at=(
+                datetime.fromisoformat(template["created_at"])
+                if template.get("created_at")
+                else None
+            ),
+        )
+
+    @app.get("/job/sources", response_model=JobSourceListResponse, tags=["jobs"])
+    async def list_job_sources(
+        request: Request,
+        _: dict = Depends(_require("agents:read")),
+    ):
+        container: AppContainer = request.app.state.container
+        return JobSourceListResponse(
+            sources=[JobSourceResponse(**source) for source in container.career_service.trusted_sources()]
+        )
+
+    @app.post("/job/extract", response_model=JobDescriptionResponse, tags=["jobs"])
+    async def extract_job_description(
+        request: Request,
+        body: JobDescriptionExtractRequest,
+        _: dict = Depends(_require("execute")),
+    ):
+        container: AppContainer = request.app.state.container
+        try:
+            result = await container.career_service.extract_job_description(url=body.url, text=body.text)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=f"Failed to fetch job description: {exc}") from exc
+        return JobDescriptionResponse(**result)
+
+    @app.post("/job/search", response_model=list[JobSearchResult], tags=["jobs"])
+    async def search_jobs(
+        request: Request,
+        body: JobSearchRequest,
+        principal: dict = Depends(_require("execute")),
+    ):
+        container: AppContainer = request.app.state.container
+        try:
+            results = container.career_service.search_jobs(
+                keywords=body.keywords,
+                locations=body.locations,
+                sources=body.sources,
+                created_by=principal.get("name"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return [
+            JobSearchResult(
+                id=item["id"],
+                title=item["title"],
+                company=item["company"],
+                location=item["location"],
+                url=item["url"],
+                source=item["source"],
+                summary=item["summary"],
+                ats_score=item.get("ats_score"),
+            )
+            for item in results
+        ]
+
+    @app.get("/tracker/analytics", response_model=CareerAnalyticsResponse, tags=["analytics"])
+    async def tracker_analytics(
+        request: Request,
+        _: dict = Depends(_require("metrics:read")),
+    ):
+        container: AppContainer = request.app.state.container
+        return CareerAnalyticsResponse(**container.career_service.analytics())
+
+    # ── Chatbot ───────────────────────────────────────────────────────────
+
+    @app.post("/chat", response_model=ChatResponse, tags=["chat"])
+    async def chat(request: Request, body: ChatRequest):
+        container: AppContainer = request.app.state.container
+        result = container.registry.get("career-chatbot")
+        if result is None:
+            raise HTTPException(status_code=503, detail="Chatbot agent not available.")
+        agent_result = result.execute(
+            body.message,
+            context={
+                "session_id": body.session_id,
+                "resume_text": body.resume_text or "",
+                "jd_text": body.jd_text or "",
+            },
+        )
+        return ChatResponse(
+            session_id=agent_result.metadata.get("session_id", body.session_id),
+            response=agent_result.output,
+            provider=agent_result.metadata.get("provider", "unknown"),
+            used_llm=agent_result.used_llm,
+            turn=agent_result.metadata.get("turn", 1),
+        )
+
+    @app.get("/chat/history/{session_id}", response_model=ChatHistoryResponse, tags=["chat"])
+    async def chat_history(request: Request, session_id: str):
+        container: AppContainer = request.app.state.container
+        messages = container.chat_store.get_history(session_id)
+        return ChatHistoryResponse(
+            session_id=session_id,
+            messages=[ChatMessage(role=m["role"], content=m["content"], timestamp=m.get("timestamp")) for m in messages],
+        )
+
+    @app.delete("/chat/session/{session_id}", tags=["chat"])
+    async def clear_chat_session(request: Request, session_id: str):
+        container: AppContainer = request.app.state.container
+        container.chat_store.clear(session_id)
+        return {"cleared": True, "session_id": session_id}
+
+    # ── Resume local analysis ─────────────────────────────────────────────
+
+    @app.post("/resume/analyze-local", response_model=LocalResumeResponse, tags=["resume"])
+    async def analyze_resume_local(request: Request, body: LocalResumeRequest):
+        container: AppContainer = request.app.state.container
+        agent = container.registry.get("local-resume-analyzer")
+        if agent is None:
+            raise HTTPException(status_code=503, detail="Local resume analyzer agent not available.")
+        result = await asyncio.to_thread(
+            agent.execute, "analyze resume",
+            {"resume_text": body.resume_text, "jd_text": body.jd_text or ""},
+        )
+        analysis = result.metadata.get("analysis", {})
+        return LocalResumeResponse(
+            provider=result.metadata.get("provider", "unknown"),
+            used_llm=result.used_llm,
+            analysis=analysis,
+            ats_keywords=result.metadata.get("ats_keywords", []),
+            skills=result.metadata.get("skills", []),
+            suggestions=result.metadata.get("suggestions", []),
+        )
+
+    # ── Resume templates ──────────────────────────────────────────────────
+
+    @app.get("/templates", response_model=TemplateListResponse, tags=["templates"])
+    async def list_templates(request: Request):
+        container: AppContainer = request.app.state.container
+        raw = container.figma_client.list_templates()
+        templates = [ResumeTemplate(**{k: v for k, v in t.items() if k in ResumeTemplate.model_fields}) for t in raw]
+        return TemplateListResponse(templates=templates, figma_enabled=container.figma_client.enabled)
+
+    @app.get("/templates/{template_id}", response_model=ResumeTemplate, tags=["templates"])
+    async def get_template(request: Request, template_id: str):
+        container: AppContainer = request.app.state.container
+        t = container.figma_client.get_template(template_id)
+        if not t:
+            raise HTTPException(status_code=404, detail=f"Template '{template_id}' not found.")
+        return ResumeTemplate(**{k: v for k, v in t.items() if k in ResumeTemplate.model_fields})
+
+    @app.post("/templates/recommend", response_model=TemplateRecommendationResponse, tags=["templates"])
+    async def recommend_template(request: Request, body: TemplateRecommendationRequest):
+        container: AppContainer = request.app.state.container
+        agent = container.registry.get("resume-template-advisor")
+        if agent is None:
+            raise HTTPException(status_code=503, detail="Template advisor agent not available.")
+        result = await asyncio.to_thread(
+            agent.execute, "recommend resume template",
+            {"role": body.role or "", "industry": body.industry or ""},
+        )
+        raw_templates = result.metadata.get("templates", [])
+        recommended_raw = result.metadata.get("recommended", {})
+        templates = [ResumeTemplate(**{k: v for k, v in t.items() if k in ResumeTemplate.model_fields}) for t in raw_templates]
+        recommended = ResumeTemplate(**{k: v for k, v in recommended_raw.items() if k in ResumeTemplate.model_fields}) if recommended_raw else templates[0]
+        return TemplateRecommendationResponse(
+            recommended=recommended,
+            reason=result.metadata.get("reason", ""),
+            all_templates=templates,
+        )
+
+    # ── Job portals ───────────────────────────────────────────────────────
+
+    @app.get("/jobs/portals", response_model=JobPortalListResponse, tags=["jobs"])
+    async def list_job_portals():
+        return JobPortalListResponse(
+            portals=[
+                JobPortal(
+                    id=p["id"],
+                    name=p["name"],
+                    base_url=p["base_url"],
+                    category=p["category"],
+                    logo=p.get("logo", ""),
+                )
+                for p in TRUSTED_PORTALS
+            ]
+        )
+
+    @app.post("/jobs/search/portals", response_model=EnhancedJobSearchResponse, tags=["jobs"])
+    async def search_jobs_portals(request: Request, body: EnhancedJobSearchRequest):
+        container: AppContainer = request.app.state.container
+        agent = container.registry.get("job-search")
+        if agent is None:
+            raise HTTPException(status_code=503, detail="Job search agent not available.")
+        result = agent.execute(
+            "search jobs",
+            context={
+                "keywords": body.keywords,
+                "location": body.location,
+                "portals": body.portals,
+                "ats_keywords": body.ats_keywords,
+            },
+        )
+        meta = result.metadata
+        return EnhancedJobSearchResponse(
+            query=meta.get("query", " ".join(body.keywords)),
+            location=meta.get("location", body.location),
+            results=[EnhancedJobResult(**r) for r in meta.get("results", [])],
+            portals_searched=meta.get("portals_searched", []),
+            total=meta.get("total", 0),
+        )
+
+    # ── Ollama / local model status ───────────────────────────────────────
+
+    @app.get("/ollama/status", response_model=OllamaStatusResponse, tags=["local-llm"])
+    async def ollama_status(request: Request):
+        container: AppContainer = request.app.state.container
+        ol = container.ollama_client
+        return OllamaStatusResponse(
+            enabled=ol.enabled,
+            base_url=ol.base_url,
+            model=ol.model,
+            detail=ol._availability_detail,
+            available_models=ol.list_local_models(),
+        )
 
     # ── Internal orchestration APIs ──────────────────────────────────────
 

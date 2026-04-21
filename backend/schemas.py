@@ -87,6 +87,130 @@ class ModelCompletionResponse(ApiSchema):
     model_profile: str
 
 
+# ── Career / Resume / Jobs ──────────────────────────────────────────────────
+
+class ResumeParseResponse(ApiSchema):
+    filename: str
+    text: str
+    metadata: Dict[str, Any]
+
+
+class ResumeAnalyzeRequest(ApiSchema):
+    text: str = Field(min_length=1)
+    jd_text: str = ""
+    source_filename: Optional[str] = None
+    model_profile: Optional[str] = None
+
+
+class ResumeAnalysisResponse(ApiSchema):
+    id: Optional[str] = None
+    title: str
+    source_filename: Optional[str] = None
+    summary: str
+    match_score: int
+    suggestions: List[str]
+    ats_keywords: List[str]
+    strengths: List[str]
+    gaps: List[str]
+    recommended_roles: List[str]
+    model_profile: Optional[str] = None
+    used_llm: bool = False
+    provider: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+class ResumeChatRequest(ApiSchema):
+    question: str = Field(min_length=2, max_length=2000)
+    resume_text: str = Field(min_length=1)
+    jd_text: str = ""
+    model_profile: Optional[str] = None
+
+
+class ResumeChatResponse(ApiSchema):
+    answer: str
+    used_llm: bool
+    provider: str
+    model_profile: str
+    suggested_questions: List[str]
+
+
+class ResumeTemplateDesignRequest(ApiSchema):
+    name: str = Field(min_length=2, max_length=120)
+    target_role: str = Field(min_length=2, max_length=200)
+    style: str = Field(min_length=2, max_length=120)
+    notes: str = ""
+    model_profile: Optional[str] = None
+
+
+class ResumeTemplateResponse(ApiSchema):
+    id: str
+    name: str
+    target_role: str
+    style: str
+    figma_prompt: str
+    sections: List[str]
+    design_tokens: Dict[str, str]
+    preview_markdown: str
+    source: str = "generated"
+    model_profile: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+class ResumeTemplateListResponse(ApiSchema):
+    templates: List[ResumeTemplateResponse]
+
+
+class JobSourceResponse(ApiSchema):
+    id: str
+    label: str
+    hosts: List[str]
+    search_url: str
+
+
+class JobSourceListResponse(ApiSchema):
+    sources: List[JobSourceResponse]
+
+
+class JobDescriptionExtractRequest(ApiSchema):
+    url: Optional[str] = None
+    text: Optional[str] = None
+
+
+class JobDescriptionResponse(ApiSchema):
+    title: str
+    company: str
+    description: str
+    source: str
+    source_type: str
+    keywords: List[str]
+
+
+class JobSearchRequest(ApiSchema):
+    keywords: List[str] = Field(min_length=1, max_length=20)
+    locations: List[str] = Field(default_factory=list, max_length=10)
+    sources: List[str] = Field(default_factory=list, max_length=10)
+
+
+class JobSearchResult(ApiSchema):
+    id: str
+    title: str
+    company: str
+    location: str
+    url: str
+    source: str
+    summary: str
+    ats_score: Optional[float] = None
+
+
+class CareerAnalyticsResponse(ApiSchema):
+    total_resume_analyses: int
+    total_templates: int
+    total_job_queries: int
+    total_job_results: int
+    average_match_score: float
+    top_sources: Dict[str, int]
+
+
 # ── Executions ──────────────────────────────────────────────────────────────
 
 class TaskRequest(ApiSchema):
@@ -267,6 +391,129 @@ class DiagnosticRunResponse(ApiSchema):
 
 class DiagnosticRunListResponse(ApiSchema):
     runs: List[DiagnosticRunResponse]
+
+
+# ── Chat ─────────────────────────────────────────────────────────────────────
+
+class ChatMessage(ApiSchema):
+    role: str
+    content: str
+    timestamp: Optional[str] = None
+
+
+class ChatRequest(ApiSchema):
+    message: str
+    session_id: str = "default"
+    resume_text: Optional[str] = None
+    jd_text: Optional[str] = None
+
+
+class ChatResponse(ApiSchema):
+    session_id: str
+    response: str
+    provider: str
+    used_llm: bool
+    turn: int
+
+
+class ChatHistoryResponse(ApiSchema):
+    session_id: str
+    messages: List[ChatMessage]
+
+
+# ── Resume local analysis ─────────────────────────────────────────────────────
+
+class LocalResumeRequest(ApiSchema):
+    resume_text: str
+    jd_text: Optional[str] = None
+
+
+class LocalResumeResponse(ApiSchema):
+    provider: str
+    used_llm: bool
+    analysis: Dict[str, Any]
+    ats_keywords: List[str]
+    skills: List[str]
+    suggestions: List[str]
+
+
+# ── Resume templates ──────────────────────────────────────────────────────────
+
+class ResumeTemplate(ApiSchema):
+    id: str
+    name: str
+    description: str
+    style: str
+    figma_url: str
+    preview_url: str
+    tags: List[str] = []
+
+
+class TemplateListResponse(ApiSchema):
+    templates: List[ResumeTemplate]
+    figma_enabled: bool
+
+
+class TemplateRecommendationRequest(ApiSchema):
+    role: Optional[str] = None
+    industry: Optional[str] = None
+
+
+class TemplateRecommendationResponse(ApiSchema):
+    recommended: ResumeTemplate
+    reason: str
+    all_templates: List[ResumeTemplate]
+
+
+# ── Job search portals ────────────────────────────────────────────────────────
+
+class JobPortal(ApiSchema):
+    id: str
+    name: str
+    base_url: str
+    category: str
+    logo: str
+
+
+class JobPortalListResponse(ApiSchema):
+    portals: List[JobPortal]
+
+
+class EnhancedJobResult(ApiSchema):
+    id: str
+    title: str
+    company: str
+    location: str
+    url: str
+    portal_id: str
+    portal_name: str
+    portal_category: str
+    ats_score: int = 0
+
+
+class EnhancedJobSearchRequest(ApiSchema):
+    keywords: List[str]
+    location: str = "Remote"
+    portals: List[str] = []
+    ats_keywords: List[str] = []
+
+
+class EnhancedJobSearchResponse(ApiSchema):
+    query: str
+    location: str
+    results: List[EnhancedJobResult]
+    portals_searched: List[str]
+    total: int
+
+
+# ── Ollama status ─────────────────────────────────────────────────────────────
+
+class OllamaStatusResponse(ApiSchema):
+    enabled: bool
+    base_url: str
+    model: str
+    detail: str
+    available_models: List[str] = []
 
 
 # ── Errors ───────────────────────────────────────────────────────────────────

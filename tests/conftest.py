@@ -10,6 +10,7 @@ from typing import Optional
 from agents.agent_orchestrator import AgentOrchestrator
 from agents.agent_registry import AgentRegistry
 from agents.agent_skills import common_skills
+from agents.chatbot_agent import ChatStore
 from agents.diagnostics_agent import (
     CodeAnalyzerAgent,
     DiagnosticsReporterAgent,
@@ -19,12 +20,16 @@ from agents.diagnostics_agent import (
 from agents.example_agent import GeneralistAgent, MathAgent, PlannerAgent, ReviewerAgent
 from agents.workflow_engine import WorkflowExecutor
 from backend.auth import AuthService
+from backend.career_service import CareerService
 from backend.config import Settings
 from backend.container import AppContainer
 from backend.database import PostgreSQLDatabaseClient
 from backend.diagnostics import DiagnosticsService
+from backend.figma_client import FigmaClient
 from backend.internal_api import InternalPlatformAPI
+from backend.llama_client import LocalLlamaClient
 from backend.llm_client import LLMClient, LLMResult
+from backend.local_llm import OllamaClient
 from backend.main import create_app
 from backend.metrics import MetricsService
 from backend.model_router import ModelRouter
@@ -120,9 +125,23 @@ def container(
         db_client=None,
     )
     scheduler = DiagnosticsScheduler(run_fn=diag_service.run_full_diagnostics, interval_seconds=99999)
+    mock_ollama = MagicMock(spec=OllamaClient)
+    mock_ollama.enabled = False
+    mock_ollama._availability_detail = "disabled in tests"
+    mock_ollama.base_url = "http://localhost:11434"
+    mock_ollama.model = "llama3"
+    mock_ollama.list_local_models.return_value = []
+    mock_llama = MagicMock(spec=LocalLlamaClient)
+    mock_llama.enabled = False
+    career_service = CareerService(
+        settings=test_settings,
+        model_router=model_router,
+        database_client=mock_db,
+    )
     return AppContainer(
         settings=test_settings,
         llm_client=mock_llm,
+        llama_client=mock_llama,
         model_router=model_router,
         internal_api=internal_api,
         registry=registry,
@@ -131,9 +150,13 @@ def container(
         database_client=mock_db,
         auth_service=mock_auth,
         metrics_service=metrics,
+        career_service=career_service,
         workflow_executor=workflow_executor,
         diagnostics_service=diag_service,
         scheduler=scheduler,
+        ollama_client=mock_ollama,
+        figma_client=FigmaClient(),
+        chat_store=ChatStore(),
     )
 
 
@@ -183,12 +206,27 @@ def postgres_client(postgres_dsn: Optional[str]):
         azure_openai_planner_deployment=None,
         azure_openai_reviewer_deployment=None,
         azure_openai_api_version="2024-02-01",
+        llama_model_path=None,
+        llama_resume_model_path=None,
+        llama_job_model_path=None,
+        llama_template_model_path=None,
+        llama_n_ctx=2048,
+        llama_temperature=0.2,
+        trusted_job_sources=["linkedin", "indeed", "glassdoor"],
         request_timeout_seconds=5.0,
         max_tokens=500,
         diagnostics_interval_seconds=1800,
+        ollama_base_url="http://localhost:11434",
+        ollama_model="llama3",
+        figma_access_token=None,
+        figma_team_id=None,
+        figma_file_key=None,
     )
     db = PostgreSQLDatabaseClient(settings)
-    db.connect()
+    try:
+        db.connect()
+    except Exception as exc:
+        pytest.skip(f"PostgreSQL integration tests skipped because DATABASE_URL is not reachable: {exc}")
     db.reset_all()
     yield db
     db.reset_all()

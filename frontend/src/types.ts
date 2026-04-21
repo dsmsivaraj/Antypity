@@ -67,69 +67,128 @@ export type TaskPayload = {
 }
 
 export interface SelfHealingAction {
-  type: string;
-  service?: string;
-  file?: string;
-  result: string;
+  type: string
+  service?: string
+  file?: string
+  result: string
 }
 
 export interface SelfHealingCycle {
-  timestamp: string;
-  status: string;
-  initial_issues_count?: number;
-  final_issues_count?: number;
-  actions: SelfHealingAction[];
-  error?: string;
+  timestamp: string
+  status: string
+  initial_issues_count?: number
+  final_issues_count?: number
+  actions: SelfHealingAction[]
+  error?: string
 }
 
 export interface SelfHealingStatus {
-  is_running: boolean;
-  interval_seconds: number;
-  history: SelfHealingCycle[];
-  last_cycle?: SelfHealingCycle;
+  is_running: boolean
+  interval_seconds: number
+  history: SelfHealingCycle[]
+  last_cycle?: SelfHealingCycle
 }
 
 export interface User {
-  id: string;
-  email: string;
-  full_name?: string;
-  role: string;
-  status: string;
+  id: string
+  email: string
+  full_name?: string
+  role: string
+  status: string
 }
 
 export interface Session {
-  access_token: string;
-  user: User;
+  access_token: string
+  user: User
+}
+
+export interface ResumeParseResponse {
+  filename: string
+  text: string
+  metadata: Record<string, unknown>
 }
 
 export interface ResumeAnalysis {
-  text: string;
-  suggestions: string[];
-  ats_keywords: string[];
+  id?: string
+  title: string
+  source_filename?: string | null
+  summary: string
+  match_score: number
+  suggestions: string[]
+  ats_keywords: string[]
+  strengths: string[]
+  gaps: string[]
+  recommended_roles: string[]
+  model_profile?: string | null
+  used_llm: boolean
+  provider?: string | null
+  created_at?: string | null
+}
+
+export interface ResumeChatResponse {
+  answer: string
+  used_llm: boolean
+  provider: string
+  model_profile: string
+  suggested_questions: string[]
+}
+
+export interface ResumeTemplate {
+  id: string
+  name: string
+  target_role: string
+  style: string
+  figma_prompt: string
+  sections: string[]
+  design_tokens: Record<string, string>
+  preview_markdown: string
+  source: string
+  model_profile?: string | null
+  created_at?: string | null
+}
+
+export interface ResumeTemplateListResponse {
+  templates: ResumeTemplate[]
+}
+
+export interface JobSource {
+  id: string
+  label: string
+  hosts: string[]
+  search_url: string
+}
+
+export interface JobSourceListResponse {
+  sources: JobSource[]
+}
+
+export interface JobDescriptionResponse {
+  title: string
+  company: string
+  description: string
+  source: string
+  source_type: string
+  keywords: string[]
 }
 
 export interface JobSearchResult {
-  id: string;
-  title: string;
-  company: string;
-  location: string;
-  url: string;
-  ats_score?: number;
+  id: string
+  title: string
+  company: string
+  location: string
+  url: string
+  source: string
+  summary: string
+  ats_score?: number | null
 }
 
-export interface Application {
-  id: string;
-  title: string;
-  company: string;
-  status: string;
-  created_at: string;
-}
-
-export interface Analytics {
-  total_applications: number;
-  by_status: Record<string, number>;
-  by_company: Record<string, number>;
-  match_accuracy_avg: number;
+export interface CareerAnalytics {
+  total_resume_analyses: number
+  total_templates: number
+  total_job_queries: number
+  total_job_results: number
+  average_match_score: number
+  top_sources: Record<string, number>
 }
 
 export type DiagnosticIssue = {
@@ -163,4 +222,15 @@ export type DiagnosticRunResponse = {
 
 export type DiagnosticRunListResponse = {
   runs: DiagnosticRunResponse[]
+}
+
+export type ChatMessage = {
+  role: string
+  content: string
+  timestamp?: string | null
+}
+
+export type ChatHistoryResponse = {
+  session_id: string
+  messages: ChatMessage[]
 }

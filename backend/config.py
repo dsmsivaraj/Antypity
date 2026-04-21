@@ -50,9 +50,23 @@ class Settings:
     azure_openai_planner_deployment: Optional[str]
     azure_openai_reviewer_deployment: Optional[str]
     azure_openai_api_version: str
+    llama_model_path: Optional[str]
+    llama_resume_model_path: Optional[str]
+    llama_job_model_path: Optional[str]
+    llama_template_model_path: Optional[str]
+    llama_n_ctx: int
+    llama_temperature: float
+    trusted_job_sources: List[str]
     request_timeout_seconds: float
     max_tokens: int
     diagnostics_interval_seconds: int
+    # Ollama / local Llama
+    ollama_base_url: str
+    ollama_model: str
+    # Figma
+    figma_access_token: Optional[str]
+    figma_team_id: Optional[str]
+    figma_file_key: Optional[str]
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -93,9 +107,26 @@ class Settings:
             azure_openai_planner_deployment=os.getenv("AZURE_OPENAI_PLANNER_DEPLOYMENT"),
             azure_openai_reviewer_deployment=os.getenv("AZURE_OPENAI_REVIEWER_DEPLOYMENT"),
             azure_openai_api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01"),
+            llama_model_path=os.getenv("LLAMA_MODEL_PATH"),
+            llama_resume_model_path=os.getenv("LLAMA_RESUME_MODEL_PATH"),
+            llama_job_model_path=os.getenv("LLAMA_JOB_MODEL_PATH"),
+            llama_template_model_path=os.getenv("LLAMA_TEMPLATE_MODEL_PATH"),
+            llama_n_ctx=int(os.getenv("LLAMA_N_CTX", "4096")),
+            llama_temperature=float(os.getenv("LLAMA_TEMPERATURE", "0.2")),
+            trusted_job_sources=_split_csv(
+                os.getenv(
+                    "TRUSTED_JOB_SOURCES",
+                    "linkedin,indeed,glassdoor,wellfound,naukri,foundit,careerbuilder,shine,dice,ziprecruiter",
+                )
+            ),
             request_timeout_seconds=float(os.getenv("REQUEST_TIMEOUT_SECONDS", "30")),
             max_tokens=int(os.getenv("MAX_TOKENS", "2000")),
             diagnostics_interval_seconds=int(os.getenv("DIAGNOSTICS_INTERVAL_SECONDS", "1800")),
+            ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+            ollama_model=os.getenv("OLLAMA_MODEL", "llama3"),
+            figma_access_token=os.getenv("FIGMA_ACCESS_TOKEN"),
+            figma_team_id=os.getenv("FIGMA_TEAM_ID"),
+            figma_file_key=os.getenv("FIGMA_FILE_KEY"),
         )
 
     @classmethod
@@ -130,9 +161,21 @@ class Settings:
             azure_openai_planner_deployment=None,
             azure_openai_reviewer_deployment=None,
             azure_openai_api_version="2024-02-01",
+            llama_model_path=None,
+            llama_resume_model_path=None,
+            llama_job_model_path=None,
+            llama_template_model_path=None,
+            llama_n_ctx=2048,
+            llama_temperature=0.2,
+            trusted_job_sources=["linkedin", "indeed", "glassdoor"],
             request_timeout_seconds=5.0,
             max_tokens=500,
             diagnostics_interval_seconds=1800,
+            ollama_base_url="http://localhost:11434",
+            ollama_model="llama3",
+            figma_access_token=None,
+            figma_team_id=None,
+            figma_file_key=None,
         )
 
     @property
@@ -146,6 +189,15 @@ class Settings:
     @property
     def postgres_enabled(self) -> bool:
         return self.storage_backend == "postgres" or bool(self.postgres_dsn)
+
+    @property
+    def llama_enabled(self) -> bool:
+        return bool(
+            self.llama_model_path
+            or self.llama_resume_model_path
+            or self.llama_job_model_path
+            or self.llama_template_model_path
+        )
 
     @property
     def resolved_postgres_dsn(self) -> str:

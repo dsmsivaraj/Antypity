@@ -2,19 +2,25 @@ import type {
   AgentSummary,
   ApiKeyCreateResponse,
   AuthStatusResponse,
+  CareerAnalytics,
+  ChatHistoryResponse,
   DiagnosticRunListResponse,
   DiagnosticRunResponse,
   ExecutionHistoryResponse,
   ExecutionResponse,
   HealthResponse,
-  ModelListResponse,
-  SelfHealingStatus,
-  TaskPayload,
-  User,
-  Session,
-  ResumeAnalysis,
+  JobDescriptionResponse,
   JobSearchResult,
-  Analytics,
+  JobSourceListResponse,
+  ModelListResponse,
+  ResumeAnalysis,
+  ResumeChatResponse,
+  ResumeParseResponse,
+  ResumeTemplate,
+  ResumeTemplateListResponse,
+  SelfHealingStatus,
+  Session,
+  TaskPayload,
 } from './types'
 
 const API_BASE_URL = (
@@ -43,13 +49,17 @@ export function setStoredApiKey(value: string): void {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const apiKey = getStoredApiKey()
+  const headers = new Headers(init?.headers)
+  if (!headers.has('Content-Type') && !(init?.body instanceof FormData)) {
+    headers.set('Content-Type', 'application/json')
+  }
+  if (apiKey) {
+    headers.set('X-API-Key', apiKey)
+  }
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(apiKey ? { 'X-API-Key': apiKey } : {}),
-      ...(init?.headers ?? {}),
-    },
     ...init,
+    headers,
   })
 
   if (!response.ok) {
@@ -60,7 +70,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         detail = payload.detail
       }
     } catch {
-      // Keep the generic message when the response body is not JSON.
+      // Keep generic message when the response is not JSON.
     }
     throw new Error(detail)
   }
@@ -88,35 +98,77 @@ export const api = {
   getLatestDiagnosticReport: () =>
     request<DiagnosticRunResponse>('/diagnostics/reports/latest'),
 
-  // Identity
   loginSocial: (provider: string, token: string, email: string, name: string, socialId: string) =>
     request<Session>('/auth/social', {
       method: 'POST',
       body: JSON.stringify({ provider, token, email, full_name: name, social_id: socialId }),
     }),
-  getMe: (token: string) => request<User>(`/users/me?token=${token}`),
+  getMe: (token: string) => request<Session['user']>(`/users/me?token=${encodeURIComponent(token)}`),
 
-  // ATS
-  parseResume: (file: File) => {
+  parseResume: async (file: File): Promise<ResumeParseResponse> => {
     const formData = new FormData()
     formData.append('file', file)
-    return fetch(`${API_BASE_URL}/resume/parse`, {
+    return request<ResumeParseResponse>('/resume/parse', {
       method: 'POST',
       body: formData,
-    }).then(res => res.json())
+    })
   },
-  analyzeResume: (text: string, jdText: string) =>
+  analyzeResume: (text: string, jdText: string, sourceFilename?: string, modelProfile?: string) =>
     request<ResumeAnalysis>('/resume/analyze', {
       method: 'POST',
-      body: JSON.stringify({ text, jd_text: jdText }),
+      body: JSON.stringify({
+        text,
+        jd_text: jdText,
+        source_filename: sourceFilename,
+        model_profile: modelProfile,
+      }),
     }),
-  searchJobs: (keywords: string[]) =>
+  askResume: (question: string, resumeText: string, jdText: string, modelProfile?: string) =>
+    request<ResumeChatResponse>('/resume/chat', {
+      method: 'POST',
+      body: JSON.stringify({
+        question,
+        resume_text: resumeText,
+        jd_text: jdText,
+        model_profile: modelProfile,
+      }),
+    }),
+  getResumeTemplates: () =>
+    request<ResumeTemplateListResponse>('/resume/templates'),
+  designResumeTemplate: (payload: {
+    name: string
+    target_role: string
+    style: string
+    notes: string
+    model_profile?: string
+  }) =>
+    request<ResumeTemplate>('/resume/templates/design', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  getJobSources: () => request<JobSourceListResponse>('/job/sources'),
+  extractJobDescription: (payload: { url?: string; text?: string }) =>
+    request<JobDescriptionResponse>('/job/extract', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  searchJobs: (payload: { keywords: string[]; locations: string[]; sources: string[] }) =>
     request<JobSearchResult[]>('/job/search', {
       method: 'POST',
-      body: JSON.stringify({ keywords }),
+      body: JSON.stringify(payload),
     }),
-  getAnalytics: () => request<Analytics>('/tracker/analytics'),
-
+  getAnalytics: () => request<CareerAnalytics>('/tracker/analytics'),
+  chat: (payload: { message: string; session_id: string; resume_text?: string; jd_text?: string }) =>
+    request<{ session_id: string; response: string; provider: string; used_llm: boolean; turn: number }>('/chat', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  getChatHistory: (sessionId: string) =>
+    request<ChatHistoryResponse>(`/chat/history/${encodeURIComponent(sessionId)}`),
+  clearChatSession: (sessionId: string) =>
+    request<{ cleared: boolean; session_id: string }>(`/chat/session/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+    }),
   bootstrapAdminKey: (bootstrapToken: string, name: string) =>
     request<ApiKeyCreateResponse>('/auth/bootstrap', {
       method: 'POST',
