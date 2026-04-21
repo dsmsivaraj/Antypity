@@ -269,9 +269,12 @@ class PostgreSQLDatabaseClient:
             future=True,
         )
         self._metadata.create_all(self._engine)
-        # Enable pgvector if available
-        with self._engine.begin() as conn:
-            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        # Enable pgvector only if the extension is installed on this PostgreSQL instance
+        try:
+            with self._engine.begin() as conn:
+                conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        except Exception:
+            pass  # pgvector not installed — vector search features will be unavailable
 
     @property
     def engine(self) -> Engine:
