@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -21,9 +22,19 @@ _logger = logging.getLogger(__name__)
 class OllamaClient:
     """Thin httpx wrapper around the Ollama local inference server."""
 
-    def __init__(self, base_url: str = "http://localhost:11434", model: str = "llama3") -> None:
+    def __init__(
+        self,
+        base_url: str = "http://localhost:11434",
+        model: str = "llama3",
+        models_dir: Optional[str] = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
+        # Propagate model storage path to Ollama process via env var if provided
+        if models_dir:
+            os.environ.setdefault("OLLAMA_MODELS", models_dir)
+            _logger.info("Ollama models directory: %s", models_dir)
+        self.models_dir = models_dir or os.environ.get("OLLAMA_MODELS")
         self.enabled, self._availability_detail = self._check()
 
     # ── Public API ────────────────────────────────────────────────────────────

@@ -323,11 +323,19 @@ class CodeAnalyzerAgent(BaseAgent):
         issues: List[_Issue] = []
         files_scanned = 0
 
+        _SKIP_DIRS = {"venv", ".venv", "__pycache__", "site-packages", ".git", "node_modules", "dist", "build"}
+        _SKIP_FILES = {"diagnostics_agent.py"}  # skip self — pattern strings trigger their own checks
+
         for scan_dir in _SCAN_DIRS:
             base = ROOT_DIR / scan_dir
             if not base.exists():
                 continue
             for py_file in sorted(base.rglob("*.py")):
+                # Skip virtual-env and generated directories
+                if any(part in _SKIP_DIRS for part in py_file.parts):
+                    continue
+                if py_file.name in _SKIP_FILES:
+                    continue
                 rel = str(py_file.relative_to(ROOT_DIR))
                 files_scanned += 1
                 try:

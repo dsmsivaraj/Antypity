@@ -15,8 +15,10 @@ from agents.diagnostics_agent import (
     TestRunnerAgent,
 )
 from agents.example_agent import GeneralistAgent, MathAgent, PlannerAgent, ReviewerAgent
+from agents.job_applicant_agent import JobApplicantAgent
 from agents.job_search_agent import EnhancedJobSearchAgent
 from agents.resume_agent import LocalJDAgent, LocalResumeAgent, ResumeTemplateAgent
+from agents.resume_skills_agent import ResumeEvaluatorAgent, ResumeReviewerAgent, ResumeWriterAgent
 from agents.workflow_engine import WorkflowExecutor
 
 from .auth import AuthService
@@ -25,6 +27,7 @@ from .config import Settings, get_settings
 from .database import PostgreSQLDatabaseClient
 from .diagnostics import DiagnosticsService
 from .figma_client import FigmaClient
+from .gemini_client import GeminiClient
 from .internal_api import InternalPlatformAPI
 from .llama_client import LocalLlamaClient
 from .llm_client import LLMClient
@@ -33,6 +36,7 @@ from .log_handler import setup_logging
 from .metrics import MetricsService
 from .model_router import ModelRouter
 from .scheduler import DiagnosticsScheduler
+from .self_healing import InProcessSelfHealingController
 from .storage import ExecutionStore, build_execution_store
 
 _logger = logging.getLogger(__name__)
@@ -55,7 +59,9 @@ class AppContainer:
     workflow_executor: WorkflowExecutor
     diagnostics_service: DiagnosticsService
     scheduler: DiagnosticsScheduler
+    self_healing: InProcessSelfHealingController
     ollama_client: OllamaClient
+    gemini_client: GeminiClient
     figma_client: FigmaClient
     chat_store: ChatStore
 
@@ -71,11 +77,18 @@ def build_container() -> AppContainer:
     ollama_client = OllamaClient(
         base_url=settings.ollama_base_url,
         model=settings.ollama_model,
+        models_dir=settings.ollama_models_dir,
     )
     figma_client = FigmaClient(
         access_token=settings.figma_access_token,
         team_id=settings.figma_team_id,
         file_key=settings.figma_file_key,
+    )
+    gemini_client = GeminiClient(
+        api_key=settings.gemini_api_key or "",
+        model=settings.gemini_model,
+        max_tokens=settings.max_tokens,
+        timeout=settings.request_timeout_seconds,
     )
     chat_store = ChatStore()
 
@@ -83,10 +96,16 @@ def build_container() -> AppContainer:
         settings=settings,
         llm_client=llm_client,
         llama_client=llama_client if llama_client.enabled else None,
+        ollama_client=ollama_client,
+        gemini_client=gemini_client if gemini_client.enabled else None,
     )
     internal_api = InternalPlatformAPI(internal_token=settings.internal_api_token)
     metrics_service = MetricsService(db=database_client if database_client.is_configured else None)
-    auth_service = AuthService(db=database_client, config_enabled=settings.auth_enabled)
+    auth_service = AuthService(
+        db=database_client,
+        config_enabled=settings.auth_enabled,
+        default_admin_key=settings.default_admin_key,
+    )
     career_service = CareerService(
         settings=settings,
         model_router=model_router,
@@ -109,6 +128,12 @@ def build_container() -> AppContainer:
         chat_store=chat_store,
     ))
     registry.register(EnhancedJobSearchAgent(ollama_client=ollama_client))
+
+    # Resume skill agents
+    registry.register(ResumeEvaluatorAgent(ollama_client=ollama_client, llm_client=llm_client))
+    registry.register(ResumeWriterAgent(ollama_client=ollama_client, llm_client=llm_client))
+    registry.register(ResumeReviewerAgent(ollama_client=ollama_client, llm_client=llm_client))
+    registry.register(JobApplicantAgent(ollama_client=ollama_client, llm_client=llm_client))
 
     store = build_execution_store(settings, database_client=database_client)
     orchestrator = AgentOrchestrator(
@@ -139,6 +164,11 @@ def build_container() -> AppContainer:
         run_fn=diagnostics_service.run_full_diagnostics,
         interval_seconds=settings.diagnostics_interval_seconds,
     )
+    self_healing = InProcessSelfHealingController(
+        diagnostics_service=diagnostics_service,
+        database_client=database_client,
+        interval_seconds=300,
+    )
 
     _sync_registry_to_db(registry, database_client)
 
@@ -168,7 +198,9 @@ def build_container() -> AppContainer:
         workflow_executor=workflow_executor,
         diagnostics_service=diagnostics_service,
         scheduler=scheduler,
+        self_healing=self_healing,
         ollama_client=ollama_client,
+        gemini_client=gemini_client,
         figma_client=figma_client,
         chat_store=chat_store,
     )

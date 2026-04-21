@@ -55,14 +55,27 @@ from .schemas import (
     MetricsResponse,
     OllamaStatusResponse,
     ReadyResponse,
+    JobHuntRequest,
+    JobHuntResponse,
+    JobOpportunity,
+    TailoredApplication,
+    LiveJobHuntRequest,
+    LiveJobHuntResponse,
+    LiveJobResult,
     ResumeAnalyzeRequest,
     ResumeAnalysisResponse,
     ResumeChatRequest,
     ResumeChatResponse,
+    ResumeEvaluateRequest,
+    ResumeEvaluationResponse,
     ResumeParseResponse,
+    ResumeReviewRequest,
+    ResumeReviewResponse,
     ResumeTemplateDesignRequest,
     ResumeTemplateListResponse,
     ResumeTemplateResponse,
+    ResumeWriteRequest,
+    ResumeWriteResponse,
     TaskRequest,
     WorkflowDefinitionListResponse,
     WorkflowDefinitionRequest,
@@ -149,8 +162,10 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
             _container.llm_client.enabled,
         )
         _container.scheduler.start()
+        _container.self_healing.start()
         yield
         await _container.scheduler.stop()
+        await _container.self_healing.stop()
         _logger.info("Actypity backend shutting down.")
 
     app = FastAPI(
@@ -177,23 +192,16 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
         _: dict = Depends(_require("admin")),
     ):
         container: AppContainer = request.app.state.container
-        # Assume orchestrator is at fixed local port for this dev environment
-        # or can be moved to an env var.
-        url = os.environ.get("ORCHESTRATOR_SERVICE_URL", "http://localhost:9503")
-        token = container.settings.internal_api_token
-        
-        async with httpx.AsyncClient() as client:
-            try:
-                # Use internal token for backend -> service call
-                response = await client.get(
-                    f"{url}/self-healing/status",
-                    headers={"X-Internal-Token": token}
-                )
-                response.raise_for_status()
-                return response.json()
-            except Exception as exc:
-                _logger.error("Failed to fetch self-healing status: %s", exc)
-                raise HTTPException(status_code=502, detail="Orchestrator service unreachable.")
+        return container.self_healing.get_status()
+
+    @app.post("/self-healing/trigger", tags=["self-healing"])
+    async def trigger_self_healing(
+        request: Request,
+        _: dict = Depends(_require("admin")),
+    ):
+        container: AppContainer = request.app.state.container
+        result = await container.self_healing.run_cycle()
+        return result
 
     # ── Identity Proxy ──────────────────────────────────────────────────
 
@@ -247,7 +255,7 @@ def _register_routes(app: FastAPI) -> None:
             status="ok",
             service=container.settings.app_name,
             version=container.settings.app_version,
-            llm_enabled=container.llm_client.enabled,
+            llm_enabled=container.gemini_client.enabled or container.llm_client.enabled or container.ollama_client.enabled,
             storage_backend=container.settings.storage_backend,
             auth_enabled=container.settings.auth_enabled,
             auth_bootstrap_required=container.auth_service.bootstrap_required(),
@@ -901,6 +909,104 @@ def _register_routes(app: FastAPI) -> None:
             )
             for item in results
         ]
+
+    @app.post("/resume/evaluate", response_model=ResumeEvaluationResponse, tags=["resume"])
+    async def evaluate_resume(
+        request: Request,
+        body: ResumeEvaluateRequest,
+        _: dict = Depends(_require("execute")),
+    ):
+        container: AppContainer = request.app.state.container
+        result = container.career_service.evaluate_resume(
+            resume_text=body.text,
+            jd_text=body.jd_text,
+            model_profile=body.model_profile,
+        )
+        return ResumeEvaluationResponse(**result)
+
+    @app.post("/resume/write", response_model=ResumeWriteResponse, tags=["resume"])
+    async def write_resume(
+        request: Request,
+        body: ResumeWriteRequest,
+        _: dict = Depends(_require("execute")),
+    ):
+        container: AppContainer = request.app.state.container
+        result = container.career_service.write_resume(
+            resume_text=body.resume_text,
+            jd_text=body.jd_text,
+            target_role=body.target_role,
+            section=body.section,
+            candidate_name=body.candidate_name,
+            model_profile=body.model_profile,
+        )
+        return ResumeWriteResponse(**result)
+
+    @app.post("/resume/review", response_model=ResumeReviewResponse, tags=["resume"])
+    async def review_resume(
+        request: Request,
+        body: ResumeReviewRequest,
+        _: dict = Depends(_require("execute")),
+    ):
+        container: AppContainer = request.app.state.container
+        result = container.career_service.review_resume(
+            resume_text=body.text,
+            jd_text=body.jd_text,
+            target_role=body.target_role,
+            model_profile=body.model_profile,
+        )
+        return ResumeReviewResponse(**result)
+
+    @app.post("/jobs/hunt", response_model=JobHuntResponse, tags=["jobs"])
+    async def hunt_jobs(
+        request: Request,
+        body: JobHuntRequest,
+        _: dict = Depends(_require("execute")),
+    ):
+        container: AppContainer = request.app.state.container
+        result = container.career_service.hunt_jobs(
+            resume_text=body.resume_text,
+            location=body.location,
+            experience_years=body.experience_years,
+            top_count=body.top_count,
+            model_profile=body.model_profile,
+        )
+        opps = [JobOpportunity(**o) for o in result["opportunities"]]
+        return JobHuntResponse(
+            candidate_name=result["candidate_name"],
+            target_roles=result["target_roles"],
+            total_opportunities=result["total_opportunities"],
+            opportunities=opps,
+            high_tier=[JobOpportunity(**o) for o in result["high_tier"]],
+            medium_tier=[JobOpportunity(**o) for o in result["medium_tier"]],
+            stretch_tier=[JobOpportunity(**o) for o in result["stretch_tier"]],
+            tailored_applications=[TailoredApplication(**t) for t in result["tailored_applications"]],
+            profile=result["profile"],
+        )
+
+    @app.post("/jobs/live-hunt", response_model=LiveJobHuntResponse, tags=["jobs"])
+    async def live_hunt_jobs(
+        request: Request,
+        body: LiveJobHuntRequest,
+        _: dict = Depends(_require("execute")),
+    ):
+        container: AppContainer = request.app.state.container
+        result = await container.career_service.live_hunt_jobs(
+            resume_text=body.resume_text,
+            location=body.location,
+            experience_years=body.experience_years,
+            model_profile=body.model_profile,
+        )
+        def _to_live(j: dict) -> LiveJobResult:
+            return LiveJobResult(**{k: j[k] for k in LiveJobResult.model_fields if k in j})
+        return LiveJobHuntResponse(
+            candidate_name=result["candidate_name"],
+            target_roles=result["target_roles"],
+            total_found=result["total_found"],
+            jobs=[_to_live(j) for j in result["jobs"]],
+            high_tier=[_to_live(j) for j in result["high_tier"]],
+            medium_tier=[_to_live(j) for j in result["medium_tier"]],
+            stretch_tier=[_to_live(j) for j in result["stretch_tier"]],
+        )
 
     @app.get("/tracker/analytics", response_model=CareerAnalyticsResponse, tags=["analytics"])
     async def tracker_analytics(

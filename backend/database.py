@@ -272,12 +272,31 @@ class PostgreSQLDatabaseClient:
             future=True,
         )
         self._metadata.create_all(self._engine)
+        self._apply_migrations()
         # Enable pgvector only if the extension is installed on this PostgreSQL instance
         try:
             with self._engine.begin() as conn:
                 conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         except Exception:
             pass  # pgvector not installed — vector search features will be unavailable
+
+    def _apply_migrations(self) -> None:
+        """Add columns that were introduced after the initial table creation."""
+        migrations = [
+            "ALTER TABLE job_search_results ADD COLUMN IF NOT EXISTS source VARCHAR",
+            "ALTER TABLE job_search_results ADD COLUMN IF NOT EXISTS location VARCHAR",
+            "ALTER TABLE job_search_results ADD COLUMN IF NOT EXISTS summary VARCHAR",
+            "ALTER TABLE resume_analyses ADD COLUMN IF NOT EXISTS model_profile VARCHAR",
+            "ALTER TABLE resume_analyses ADD COLUMN IF NOT EXISTS used_llm BOOLEAN DEFAULT false",
+            "ALTER TABLE resume_analyses ADD COLUMN IF NOT EXISTS provider VARCHAR",
+            "ALTER TABLE resume_analyses ADD COLUMN IF NOT EXISTS source_filename VARCHAR",
+        ]
+        try:
+            with self._engine.begin() as conn:
+                for stmt in migrations:
+                    conn.execute(text(stmt))
+        except Exception:
+            pass  # non-PostgreSQL backends or permission issues — safe to skip
 
     @property
     def engine(self) -> Engine:

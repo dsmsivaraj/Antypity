@@ -234,3 +234,123 @@ export type ChatHistoryResponse = {
   session_id: string
   messages: ChatMessage[]
 }
+
+// ── Resume Skills ────────────────────────────────────────────────────────────
+
+export interface ResumeEvaluationResponse {
+  overall_score: number
+  grade: string
+  ats_risk_level: string
+  summary: string
+  dimensions: Record<string, { score: number; max: number; notes: string }>
+  top_strengths: string[]
+  critical_fixes: string[]
+  missing_sections: string[]
+  used_llm: boolean
+  provider?: string | null
+}
+
+export interface ResumeWrittenContent {
+  professional_summary: string
+  experience_bullets: string[]
+  skills_section: { technical?: string[]; tools?: string[]; soft_skills?: string[] }
+  objective_statement: string
+  keywords_embedded: string[]
+  writing_notes: string
+}
+
+export interface ResumeWriteResponse {
+  target_role: string
+  written_content: ResumeWrittenContent
+  used_llm: boolean
+  provider?: string | null
+}
+
+export interface ResumeSectionFeedback {
+  score: number
+  feedback: string
+  fixes: string[]
+}
+
+export interface ResumeReviewResponse {
+  overall_verdict: string
+  interview_probability: string
+  sections: Record<string, ResumeSectionFeedback>
+  top_3_immediate_actions: string[]
+  red_flags: string[]
+  interview_tips: string[]
+  used_llm: boolean
+  provider?: string | null
+}
+
+// ── Job Hunt ──────────────────────────────────────────────────────────────────
+
+export interface JobOpportunity {
+  id: string
+  company: string
+  role: string
+  sector: string
+  company_type: string
+  location: string
+  apply_url: string
+  career_url: string
+  fit_score: number
+  package_lpa: string
+  tier: 'high' | 'medium' | 'stretch'
+}
+
+export interface TailoredApplication {
+  company: string
+  role: string
+  apply_url: string
+  fit_score: number
+  tailored_content: {
+    tailored_summary?: string
+    rewritten_bullets?: string[]
+    skills_to_highlight?: string[]
+    skills_to_add?: string[]
+    cover_line?: string
+  }
+}
+
+export interface LiveJobResult {
+  id: string
+  title: string
+  company: string
+  location: string
+  url: string
+  source: string
+  source_label: string
+  result_type: 'listing' | 'portal_search'
+  jd_snippet: string
+  jd_full: string
+  published?: string
+  tier: 'high' | 'medium' | 'stretch'
+  match_score: number
+  matched_keywords: string[]
+  missing_keywords: string[]
+  improvement_areas: string[]
+  ats_summary: string
+}
+
+export interface LiveJobHuntResponse {
+  candidate_name: string
+  target_roles: string[]
+  total_found: number
+  jobs: LiveJobResult[]
+  high_tier: LiveJobResult[]
+  medium_tier: LiveJobResult[]
+  stretch_tier: LiveJobResult[]
+}
+
+export interface JobHuntResponse {
+  candidate_name: string
+  target_roles: string[]
+  total_opportunities: number
+  opportunities: JobOpportunity[]
+  high_tier: JobOpportunity[]
+  medium_tier: JobOpportunity[]
+  stretch_tier: JobOpportunity[]
+  tailored_applications: TailoredApplication[]
+  profile: Record<string, unknown>
+}

@@ -89,6 +89,159 @@ class ModelCompletionResponse(ApiSchema):
 
 # ── Career / Resume / Jobs ──────────────────────────────────────────────────
 
+class ResumeEvaluateRequest(ApiSchema):
+    text: str = Field(min_length=1)
+    jd_text: str = ""
+    model_profile: Optional[str] = None
+
+
+class ResumeDimensionScore(ApiSchema):
+    score: int
+    max: int
+    notes: str
+
+
+class ResumeEvaluationResponse(ApiSchema):
+    overall_score: int
+    grade: str
+    ats_risk_level: str
+    summary: str
+    dimensions: Dict[str, Any]
+    top_strengths: List[str]
+    critical_fixes: List[str]
+    missing_sections: List[str]
+    used_llm: bool = False
+    provider: Optional[str] = None
+
+
+class ResumeWriteRequest(ApiSchema):
+    resume_text: str = ""
+    jd_text: str = ""
+    target_role: str = Field(default="Software Engineer", min_length=2, max_length=200)
+    section: str = "all"
+    candidate_name: str = "Candidate"
+    model_profile: Optional[str] = None
+
+
+class ResumeWrittenContent(ApiSchema):
+    professional_summary: str
+    experience_bullets: List[str]
+    skills_section: Dict[str, Any]
+    objective_statement: str
+    keywords_embedded: List[str]
+    writing_notes: str
+
+
+class ResumeWriteResponse(ApiSchema):
+    target_role: str
+    written_content: ResumeWrittenContent
+    used_llm: bool = False
+    provider: Optional[str] = None
+
+
+class ResumeReviewRequest(ApiSchema):
+    text: str = Field(min_length=1)
+    jd_text: str = ""
+    target_role: str = ""
+    model_profile: Optional[str] = None
+
+
+class ResumeSectionFeedback(ApiSchema):
+    score: int
+    feedback: str
+    fixes: List[str]
+
+
+class ResumeReviewResponse(ApiSchema):
+    overall_verdict: str
+    interview_probability: str
+    sections: Dict[str, Any]
+    top_3_immediate_actions: List[str]
+    red_flags: List[str]
+    interview_tips: List[str]
+    used_llm: bool = False
+    provider: Optional[str] = None
+
+
+class JobHuntRequest(ApiSchema):
+    resume_text: str = Field(min_length=50)
+    location: str = "India"
+    experience_years: float = 0
+    top_count: int = Field(default=25, ge=10, le=50)
+    model_profile: Optional[str] = None
+
+
+class TailoredApplication(ApiSchema):
+    company: str
+    role: str
+    apply_url: str
+    fit_score: int
+    tailored_content: Dict[str, Any]
+
+
+class JobOpportunity(ApiSchema):
+    id: str
+    company: str
+    role: str
+    sector: str
+    company_type: str
+    location: str
+    apply_url: str
+    career_url: str
+    fit_score: int
+    package_lpa: str
+    tier: str  # high | medium | stretch
+
+
+class JobHuntResponse(ApiSchema):
+    candidate_name: str
+    target_roles: List[str]
+    total_opportunities: int
+    opportunities: List[JobOpportunity]
+    high_tier: List[JobOpportunity]
+    medium_tier: List[JobOpportunity]
+    stretch_tier: List[JobOpportunity]
+    tailored_applications: List[TailoredApplication]
+    profile: Dict[str, Any]
+
+
+class LiveJobResult(ApiSchema):
+    id: str
+    title: str
+    company: str
+    location: str
+    url: str
+    source: str
+    source_label: str
+    result_type: str = "listing"
+    jd_snippet: str
+    jd_full: str
+    published: str = ""
+    tier: str = "stretch"
+    match_score: int = 0
+    matched_keywords: List[str] = Field(default_factory=list)
+    missing_keywords: List[str] = Field(default_factory=list)
+    improvement_areas: List[str] = Field(default_factory=list)
+    ats_summary: str = ""
+
+
+class LiveJobHuntRequest(ApiSchema):
+    resume_text: str = Field(min_length=1)
+    location: str = "India"
+    experience_years: float = 0.0
+    model_profile: Optional[str] = None
+
+
+class LiveJobHuntResponse(ApiSchema):
+    candidate_name: str
+    target_roles: List[str]
+    total_found: int
+    jobs: List[LiveJobResult]
+    high_tier: List[LiveJobResult]
+    medium_tier: List[LiveJobResult]
+    stretch_tier: List[LiveJobResult]
+
+
 class ResumeParseResponse(ApiSchema):
     filename: str
     text: str

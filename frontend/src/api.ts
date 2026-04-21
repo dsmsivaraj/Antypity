@@ -10,14 +10,19 @@ import type {
   ExecutionResponse,
   HealthResponse,
   JobDescriptionResponse,
+  JobHuntResponse,
   JobSearchResult,
   JobSourceListResponse,
+  LiveJobHuntResponse,
   ModelListResponse,
   ResumeAnalysis,
   ResumeChatResponse,
+  ResumeEvaluationResponse,
   ResumeParseResponse,
+  ResumeReviewResponse,
   ResumeTemplate,
   ResumeTemplateListResponse,
+  ResumeWriteResponse,
   SelfHealingStatus,
   Session,
   TaskPayload,
@@ -31,9 +36,9 @@ const API_KEY_STORAGE_KEY = 'actypity_api_key'
 
 export function getStoredApiKey(): string {
   if (typeof window === 'undefined') {
-    return ''
+    return import.meta.env.VITE_API_KEY || ''
   }
-  return window.localStorage.getItem(API_KEY_STORAGE_KEY) || ''
+  return window.localStorage.getItem(API_KEY_STORAGE_KEY) || import.meta.env.VITE_API_KEY || ''
 }
 
 export function setStoredApiKey(value: string): void {
@@ -154,6 +159,44 @@ export const api = {
     }),
   searchJobs: (payload: { keywords: string[]; locations: string[]; sources: string[] }) =>
     request<JobSearchResult[]>('/job/search', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  evaluateResume: (text: string, jdText: string, modelProfile?: string) =>
+    request<ResumeEvaluationResponse>('/resume/evaluate', {
+      method: 'POST',
+      body: JSON.stringify({ text, jd_text: jdText, model_profile: modelProfile }),
+    }),
+  writeResume: (payload: {
+    resume_text?: string
+    jd_text?: string
+    target_role: string
+    section?: string
+    candidate_name?: string
+    model_profile?: string
+  }) =>
+    request<ResumeWriteResponse>('/resume/write', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  reviewResume: (text: string, jdText: string, targetRole: string, modelProfile?: string) =>
+    request<ResumeReviewResponse>('/resume/review', {
+      method: 'POST',
+      body: JSON.stringify({ text, jd_text: jdText, target_role: targetRole, model_profile: modelProfile }),
+    }),
+  huntJobs: (payload: {
+    resume_text: string
+    location?: string
+    experience_years?: number
+    top_count?: number
+    model_profile?: string
+  }) =>
+    request<JobHuntResponse>('/jobs/hunt', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  liveHuntJobs: (payload: { resume_text: string; location?: string; experience_years?: number; model_profile?: string }) =>
+    request<LiveJobHuntResponse>('/jobs/live-hunt', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

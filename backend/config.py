@@ -63,10 +63,29 @@ class Settings:
     # Ollama / local Llama
     ollama_base_url: str
     ollama_model: str
+    ollama_models_dir: Optional[str]
     # Figma
     figma_access_token: Optional[str]
     figma_team_id: Optional[str]
     figma_file_key: Optional[str]
+    # Job portal API credentials
+    rapidapi_key: Optional[str]
+    rapidapi_host: str
+    linkedin_client_id: Optional[str]
+    linkedin_client_secret: Optional[str]
+    indeed_publisher_id: Optional[str]
+    glassdoor_partner_id: Optional[str]
+    glassdoor_api_key: Optional[str]
+    adzuna_app_id: Optional[str]
+    adzuna_api_key: Optional[str]
+    # Social auth
+    google_client_id: Optional[str]
+    google_client_secret: Optional[str]
+    # Google Gemini AI
+    gemini_api_key: Optional[str]
+    gemini_model: str
+    # Model selection
+    default_model_profile: Optional[str]
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -124,9 +143,24 @@ class Settings:
             diagnostics_interval_seconds=int(os.getenv("DIAGNOSTICS_INTERVAL_SECONDS", "1800")),
             ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
             ollama_model=os.getenv("OLLAMA_MODEL", "llama3"),
+            ollama_models_dir=os.getenv("OLLAMA_MODELS"),
             figma_access_token=os.getenv("FIGMA_ACCESS_TOKEN"),
             figma_team_id=os.getenv("FIGMA_TEAM_ID"),
             figma_file_key=os.getenv("FIGMA_FILE_KEY"),
+            rapidapi_key=os.getenv("RAPIDAPI_KEY"),
+            rapidapi_host=os.getenv("RAPIDAPI_HOST", "jsearch.p.rapidapi.com"),
+            linkedin_client_id=os.getenv("LINKEDIN_CLIENT_ID"),
+            linkedin_client_secret=os.getenv("LINKEDIN_CLIENT_SECRET"),
+            indeed_publisher_id=os.getenv("INDEED_PUBLISHER_ID"),
+            glassdoor_partner_id=os.getenv("GLASSDOOR_PARTNER_ID"),
+            glassdoor_api_key=os.getenv("GLASSDOOR_API_KEY"),
+            adzuna_app_id=os.getenv("ADZUNA_APP_ID"),
+            adzuna_api_key=os.getenv("ADZUNA_API_KEY"),
+            google_client_id=os.getenv("GOOGLE_CLIENT_ID"),
+            google_client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
+            gemini_api_key=os.getenv("GEMINI_API_KEY"),
+            gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
+            default_model_profile=os.getenv("DEFAULT_MODEL_PROFILE"),
         )
 
     @classmethod
@@ -173,18 +207,42 @@ class Settings:
             diagnostics_interval_seconds=1800,
             ollama_base_url="http://localhost:11434",
             ollama_model="llama3",
+            ollama_models_dir=None,
             figma_access_token=None,
             figma_team_id=None,
             figma_file_key=None,
+            rapidapi_key=None,
+            rapidapi_host="jsearch.p.rapidapi.com",
+            linkedin_client_id=None,
+            linkedin_client_secret=None,
+            indeed_publisher_id=None,
+            glassdoor_partner_id=None,
+            glassdoor_api_key=None,
+            adzuna_app_id=None,
+            adzuna_api_key=None,
+            google_client_id=None,
+            google_client_secret=None,
+            gemini_api_key=None,
+            gemini_model="gemini-2.0-flash",
+            default_model_profile=None,
         )
 
     @property
-    def llm_enabled(self) -> bool:
+    def gemini_enabled(self) -> bool:
+        return bool(self.gemini_api_key)
+
+    @property
+    def azure_llm_enabled(self) -> bool:
         return bool(
             self.azure_openai_api_key
             and self.azure_openai_endpoint
             and self.azure_openai_deployment
         )
+
+    @property
+    def llm_enabled(self) -> bool:
+        """True when any cloud LLM provider is configured."""
+        return self.gemini_enabled or self.azure_llm_enabled
 
     @property
     def postgres_enabled(self) -> bool:

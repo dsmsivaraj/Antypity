@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import './App.css'
 import { api, getStoredApiKey, setStoredApiKey } from './api'
 import { ChatPage } from './ChatPage'
+import { JobHuntPage } from './JobHuntPage'
 import { JobsPage } from './JobsPage'
 import { TemplatesPage } from './TemplatesPage'
 import type {
@@ -23,7 +24,7 @@ import type {
   SelfHealingStatus,
 } from './types'
 
-type PageKey = 'overview' | 'resume' | 'jobs' | 'templates' | 'chat'
+type PageKey = 'overview' | 'resume' | 'jobs' | 'templates' | 'chat' | 'hunt'
 
 const INITIAL_CONTEXT = '{\n  "priority": "normal",\n  "channel": "web"\n}'
 
@@ -477,6 +478,7 @@ function App() {
                   {[
                     ['overview', 'Overview'],
                     ['resume', 'Resume Lab'],
+                    ['hunt', '🎯 AI Job Hunt'],
                     ['chat', 'Career Chat'],
                     ['jobs', 'Job Discovery'],
                     ['templates', 'Template Studio'],
@@ -547,6 +549,8 @@ function App() {
         ) : null}
 
         {page === 'chat' ? <ChatPage /> : null}
+
+        {page === 'hunt' ? <JobHuntPage resumeText={resumeText} /> : null}
 
         {page === 'jobs' ? (
           <JobsPage

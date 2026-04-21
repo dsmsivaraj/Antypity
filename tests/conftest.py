@@ -26,6 +26,7 @@ from backend.container import AppContainer
 from backend.database import PostgreSQLDatabaseClient
 from backend.diagnostics import DiagnosticsService
 from backend.figma_client import FigmaClient
+from backend.gemini_client import GeminiClient
 from backend.internal_api import InternalPlatformAPI
 from backend.llama_client import LocalLlamaClient
 from backend.llm_client import LLMClient, LLMResult
@@ -34,6 +35,7 @@ from backend.main import create_app
 from backend.metrics import MetricsService
 from backend.model_router import ModelRouter
 from backend.scheduler import DiagnosticsScheduler
+from backend.self_healing import InProcessSelfHealingController
 from backend.storage import InMemoryExecutionStore
 
 
@@ -133,6 +135,14 @@ def container(
     mock_ollama.list_local_models.return_value = []
     mock_llama = MagicMock(spec=LocalLlamaClient)
     mock_llama.enabled = False
+    mock_gemini = MagicMock(spec=GeminiClient)
+    mock_gemini.enabled = False
+    mock_gemini.model = "gemini-2.0-flash"
+    mock_gemini.list_models.return_value = []
+    mock_self_healing = MagicMock(spec=InProcessSelfHealingController)
+    mock_self_healing.get_status.return_value = {
+        "is_running": False, "cycle_count": 0, "last_cycle_at": None, "history": []
+    }
     career_service = CareerService(
         settings=test_settings,
         model_router=model_router,
@@ -154,7 +164,9 @@ def container(
         workflow_executor=workflow_executor,
         diagnostics_service=diag_service,
         scheduler=scheduler,
+        self_healing=mock_self_healing,
         ollama_client=mock_ollama,
+        gemini_client=mock_gemini,
         figma_client=FigmaClient(),
         chat_store=ChatStore(),
     )
@@ -177,6 +189,7 @@ def postgres_client(postgres_dsn: Optional[str]):
     if not postgres_dsn:
         pytest.skip("DATABASE_URL not configured for PostgreSQL integration tests.")
 
+    base = Settings.for_testing()
     settings = Settings(
         app_name="Actypity PG Test",
         app_version="0.0.1-test",
@@ -186,7 +199,7 @@ def postgres_client(postgres_dsn: Optional[str]):
         api_port=8000,
         cors_origins=["http://localhost:5173"],
         storage_backend="postgres",
-        storage_path=Settings.for_testing().storage_path,
+        storage_path=base.storage_path,
         auth_enabled=True,
         default_admin_key="act_default_test_admin",
         bootstrap_admin_token="test-bootstrap-token",
@@ -219,9 +232,24 @@ def postgres_client(postgres_dsn: Optional[str]):
         diagnostics_interval_seconds=1800,
         ollama_base_url="http://localhost:11434",
         ollama_model="llama3",
+        ollama_models_dir=None,
         figma_access_token=None,
         figma_team_id=None,
         figma_file_key=None,
+        rapidapi_key=None,
+        rapidapi_host="jsearch.p.rapidapi.com",
+        linkedin_client_id=None,
+        linkedin_client_secret=None,
+        indeed_publisher_id=None,
+        glassdoor_partner_id=None,
+        glassdoor_api_key=None,
+        adzuna_app_id=None,
+        adzuna_api_key=None,
+        google_client_id=None,
+        google_client_secret=None,
+        gemini_api_key=None,
+        gemini_model="gemini-2.0-flash",
+        default_model_profile=None,
     )
     db = PostgreSQLDatabaseClient(settings)
     try:
