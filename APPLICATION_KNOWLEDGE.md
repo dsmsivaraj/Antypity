@@ -30,16 +30,20 @@ Primary entry points:
 
 | File | Responsibility |
 |------|---------------|
-| `backend/main.py` | FastAPI route registration, auth/RBAC enforcement, lifespan hooks |
+| `backend/main.py` | FastAPI route registration, auth/RBAC, rate limiting (slowapi), observability middleware, lifespan hooks |
 | `backend/container.py` | App container wiring — all clients, services, agents, and scheduler |
 | `backend/config.py` | Settings dataclass, env var parsing, feature flags |
-| `backend/model_router.py` | Model catalog, profile-based routing across all LLM providers |
+| `backend/model_router.py` | Model catalog, profile-based routing across all LLM providers, semantic cache integration, intent classifier |
 | `backend/career_service.py` | Resume parsing, ATS analysis, chat, job search, live hunt, cover letters, recruiter-contact discovery, template design |
 | `backend/database.py` | PostgreSQL client — all platform and career record persistence |
 | `backend/embeddings_service.py` | Retrieval index abstraction — FAISS when available, token-index fallback otherwise |
-| `backend/retrieval.py` | Thin retrieval wrapper used by resume chat and future RAG paths |
+| `backend/retrieval.py` | **Hybrid retrieval**: BM25 sparse + FAISS dense fused with Reciprocal Rank Fusion (RRF) |
+| `backend/resilience.py` | **Circuit breaker** (3-state), exponential backoff retry, timeout manager, bulkhead |
+| `backend/semantic_cache.py` | **Semantic cache** for LLM responses — cosine similarity + TTL eviction, up to 500 entries |
+| `backend/agent_pipeline.py` | **Typed RAG pipeline**: SecurityStage → RetrievalStage → ReasoningStage → GenerationStage |
+| `backend/pii_detector.py` | **PII detection/anonymization** via Presidio (spaCy NER) with regex fallback |
 | `backend/gemini_client.py` | Google Gemini REST API client (`X-goog-api-key`, `generateContent`) |
-| `backend/llm_client.py` | Azure OpenAI client with try/except safety |
+| `backend/llm_client.py` | Azure OpenAI client with circuit breaker + retry |
 | `backend/local_llm.py` | Ollama inference client |
 | `backend/llama_client.py` | Direct `.gguf` inference via `llama-cpp-python` |
 | `backend/figma_client.py` | Figma API client for template metadata |
@@ -49,7 +53,7 @@ Primary entry points:
 | `backend/metrics.py` | `MetricsService` — execution and agent metrics |
 | `backend/scheduler.py` | `DiagnosticsScheduler` — periodic diagnostics runner |
 | `backend/storage.py` | `ExecutionStore` — swappable memory / JSON / PostgreSQL backend |
-| `backend/schemas.py` | All Pydantic request/response schemas |
+| `backend/schemas.py` | All Pydantic request/response schemas (with email validation, input length guards) |
 | `backend/internal_api.py` | `InternalPlatformAPI` — ASGI transport for orchestrator→agent calls |
 
 ### Frontend
@@ -277,10 +281,31 @@ Does not proxy to an external port — runs fully in-process.
 | `GET` | `/platform/insights` | viewer |
 | `GET` | `/logs` | viewer |
 | `POST` | `/auth/bootstrap` | open (once) |
+| `POST` | `/auth/register` | open |
+| `POST` | `/auth/login` | open |
+| `POST` | `/auth/google` | open |
 | `POST` | `/auth/keys` | admin |
 | `GET` | `/auth/keys` | admin |
 | `DELETE` | `/auth/keys/{id}` | admin |
 | `GET` | `/auth/status` | open |
+| `GET` | `/users/me/profile` | open (JWT) |
+| `PATCH` | `/users/me/profile` | open (JWT) |
+
+### Resilience & Observability
+
+| Method | Path | Auth |
+|--------|------|------|
+| `GET` | `/resilience/circuit-breakers` | admin |
+| `GET` | `/resilience/cache` | admin |
+| `DELETE` | `/resilience/cache` | admin |
+| `GET` | `/metrics/prometheus` | open (scrape) |
+
+### RAG Pipeline & PII
+
+| Method | Path | Auth |
+|--------|------|------|
+| `POST` | `/rag/query` | viewer |
+| `POST` | `/pii/detect` | viewer |
 
 ### Workflows
 
@@ -356,7 +381,7 @@ Does not proxy to an external port — runs fully in-process.
 | G4 | `azure-identity` in requirements but never used | `backend/requirements.txt` | Open |
 | G5 | `Dockerfile.backend` missing `PYTHONPATH` env var | `Dockerfile.backend` | **FIXED** |
 | G6 | No auth on any endpoint | `backend/main.py` | **FIXED** — RBAC via X-API-Key |
-| G7 | No test suite | entire project | **FIXED** — 99 tests |
+| G7 | No test suite | entire project | **FIXED** — 212 tests |
 | G8 | `GeneralistAgent.can_handle()` always returns 40 | `agents/example_agent.py` | Open by design (catch-all) |
 | G9 | K8s `secrets.yaml` has placeholder base64 values | `k8s/secrets.yaml` | Open — fill before deploy |
 | G10 | No formal migration framework | `backend/database.py` | Open |
@@ -420,25 +445,28 @@ Run a lightweight critic or rules-based verifier for high-impact outputs like co
 
 ---
 
-## Hybrid RAG roadmap
+## Hybrid RAG implementation (current state)
 
-Recommended target architecture:
+Implemented in `backend/retrieval.py`, `backend/agent_pipeline.py`, and `backend/semantic_cache.py`.
 
-1. Keep PostgreSQL as the system of record.
-2. Add `pgvector` for resumes, JDs, company pages, recruiter pages, and curated job-description chunks.
-3. Use hybrid retrieval:
-lexical filtering for exact titles, skills, companies, and locations.
-semantic retrieval for similarity and paraphrase coverage.
-re-ranking for final context selection.
-4. Attach provenance to every chunk so the application can show where a recommendation came from.
-5. Cache high-value retrieval bundles per user/session to reduce latency and repeated embedding work.
+### What's live
 
-Expected benefits:
+1. **Hybrid retrieval** (`backend/retrieval.py`): BM25 sparse search (`rank_bm25`) + FAISS dense vector search, fused with Reciprocal Rank Fusion (RRF). BM25 index is built lazily on first query from the current embedding store.
 
-- better resume Q&A accuracy
-- stronger cover-letter grounding
-- better JD understanding across noisy portal text
-- lower hallucination risk because evidence becomes mandatory input rather than optional context
+2. **Semantic cache** (`backend/semantic_cache.py`): LLM response cache keyed by cosine similarity of query embeddings. Default threshold 0.92, TTL 1 hour, max 500 entries. Wired into `ModelRouter.complete()` for Gemini and Azure-OpenAI calls.
+
+3. **Typed RAG pipeline** (`backend/agent_pipeline.py`): 4-stage pipeline — SecurityStage (input validation, PII detection, injection flagging) → RetrievalStage (hybrid BM25+dense) → ReasoningStage (context quality grading, query rewrite) → GenerationStage (model router call with context injection). Exposed at `POST /rag/query`.
+
+4. **PII detection** (`backend/pii_detector.py`): Presidio-based detection (EMAIL, PHONE, SSN, CREDIT_CARD, PERSON, LOCATION, NRP, IP_ADDRESS) with regex fallback when spaCy model unavailable. Exposed at `POST /pii/detect`.
+
+5. **Intent classifier** (`backend/model_router.py`): Keyword pattern matching routes LOCAL tasks to on-device models (llama-cpp/Ollama), FAST tasks to cheap profiles, and falls back to priority-ordered cloud selection.
+
+### Remaining roadmap
+
+- Attach provenance to every retrieved chunk (show which document a recommendation came from)
+- Per-user BM25 index refresh after resume uploads
+- CrossEncoder reranker for final context selection
+- CRAG loop: grade → rewrite → fallback web search if local context score < threshold
 
 ---
 

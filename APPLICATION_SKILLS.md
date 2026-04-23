@@ -121,16 +121,53 @@ Provider routing in `complete()`:
 - Do not reintroduce local JSON persistence for product state that belongs in PostgreSQL.
 - If a feature needs analytics, add an explicit DB method instead of computing it across routes.
 
+### Resilience (circuit breaker, retry, rate limiting)
+
+- `backend/resilience.py` provides `CircuitBreaker`, `ExponentialBackoffRetry`, `TimeoutManager`, and `Bulkhead`.
+- Use `get_circuit_breaker(name)` to get or create a named singleton breaker. It is 3-state (CLOSED → OPEN → HALF_OPEN).
+- All LLM provider calls (Azure OpenAI at minimum) are wrapped with a circuit breaker + retry. Do the same when adding new LLM providers.
+- Rate limiting is provided by `slowapi` with a global default of 200 requests/minute. The limiter is in `main.py` as `limiter = Limiter(...)` and attached via `app.state.limiter`. Do NOT add `@limiter.limit()` decorators on inner functions inside `create_app` — Python 3.9 forward-ref resolution breaks with nested function decorators. Apply rate limits via global default or a middleware layer.
+- Circuit breaker metrics are exposed at `GET /resilience/circuit-breakers` (admin only).
+
+### Semantic cache
+
+- `backend/semantic_cache.py` caches LLM responses by cosine similarity of prompt embeddings.
+- Default threshold is 0.92. Cache is wired into `ModelRouter.complete()` for cloud providers.
+- Cache is a module-level singleton via `get_semantic_cache()`.
+- Use `use_cache=False` when calling `model_router.complete()` to bypass (e.g., in retry chains).
+- Stats at `GET /resilience/cache`; flush at `DELETE /resilience/cache` (admin only).
+
+### RAG Pipeline
+
+- `backend/agent_pipeline.py` implements a typed 4-stage pipeline: SecurityStage → RetrievalStage → ReasoningStage → GenerationStage.
+- Each stage produces an `AgentMessage` with `stage`, `state`, `payload`, `error`, and `latency_ms`.
+- Call `run_rag_pipeline(query, model_router, ...)` to run the full pipeline synchronously. It is offloaded to an executor in the `/rag/query` endpoint to stay async.
+- The security stage flags prompt-injection attempts but does NOT block — it sets `context["security_flagged"] = True`. Blocking is only for oversized input (> 20,000 chars).
+- Retrieval uses the hybrid BM25+dense path in `backend/retrieval.py`.
+- The reasoning stage rewrites poor-context queries by prepending "Please explain:".
+
 ### Retrieval and grounding
 
 - The primary retrieval path is PostgreSQL `pgvector` when the extension and embedding model are available.
 - The legacy local index is still present as a fallback and migration source. Do not remove it unless every target environment has pgvector and embedding-model support.
-- Retrieval now uses hybrid candidate selection: vector retrieval plus lexical matching with application-side reranking.
+- **Retrieval is now hybrid** (`backend/retrieval.py`): BM25 sparse (rank_bm25) + FAISS dense fused with RRF (Reciprocal Rank Fusion). The BM25 index is built lazily on first query. Call `invalidate_bm25()` after ingesting new documents.
 - If you change resume chat, JD extraction, or recruiter-contact discovery, prefer adding explicit provenance fields instead of longer prose.
-- `backend/embeddings_service.py` is the current retrieval entry point. If you improve retrieval, do it there first rather than adding one-off embedding logic in feature services.
-- The next production-grade step is hybrid RAG with PostgreSQL + `pgvector`, lexical filters, and re-ranking.
+- `backend/embeddings_service.py` is the current embedding/indexing entry point. `backend/retrieval.py` is the query entry point.
 - Persist grounding and drift signals in PostgreSQL instead of calculating them only in memory. `response_quality_metrics` is now the system of record for quality summaries.
 - New grounded outputs should return both evidence (`citations` or `provenance`) and an explicit confidence label. Avoid responses that read authoritative without showing what grounded them.
+
+### PII detection
+
+- `backend/pii_detector.py` uses Presidio (spaCy NER) with a regex fallback for EMAIL, PHONE, SSN, CREDIT_CARD.
+- Use `get_pii_detector()` to get the module singleton.
+- `detector.detect(text)` → list of `PIIMatch` dataclasses. `detector.anonymize(text)` → redacted string. `detector.has_pii(text)` → bool.
+- The RAG pipeline security stage calls `detect()` non-blocking; it never blocks or anonymizes automatically. If you need to enforce anonymization before sending to cloud LLMs, do it in the `GenerationStage` before augmenting the prompt.
+
+### Intent classifier
+
+- `classify_intent(prompt)` in `backend/model_router.py` returns a `TaskIntent` enum (FAST, COMPLEX, CODE, CREATIVE, LOCAL).
+- `ModelRouter._default_profile(prompt)` calls this to steer LOCAL tasks to on-device models (llama-cpp/Ollama) and use fast profiles for FAST tasks.
+- It's keyword-based and runs in microseconds. Do not replace it with an LLM call.
 
 ### Prompt governance
 
@@ -210,15 +247,23 @@ Minimum validation after meaningful changes:
 PYTHONPATH=. python -m py_compile backend/main.py backend/container.py backend/config.py \
   backend/model_router.py backend/gemini_client.py backend/career_service.py \
   backend/self_healing.py backend/job_search_service.py \
+  backend/resilience.py backend/semantic_cache.py backend/agent_pipeline.py backend/pii_detector.py \
   agents/agent_orchestrator.py agents/agent_registry.py shared/base_agent.py
 PYTHONPATH=. python -c "from backend.main import app; print('ok')"
 
-# Full test suite
+# Full test suite (212+ tests)
 PYTHONPATH=. pytest tests/ -q
+
+# Run new module tests specifically
+PYTHONPATH=. pytest tests/test_resilience.py tests/test_agent_pipeline.py -v
 
 # Frontend
 cd frontend && npm run lint && npm run build
 ```
+
+Test files added for new modules:
+- `tests/test_resilience.py` — circuit breaker, retry, timeout, bulkhead, semantic cache (22 tests)
+- `tests/test_agent_pipeline.py` — pipeline stages, PII detector, intent classifier (22 tests)
 
 Smoke test (backend running):
 

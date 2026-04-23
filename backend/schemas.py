@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+_EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
 
 
 class ApiSchema(BaseModel):
@@ -429,8 +432,8 @@ class CareerAnalyticsResponse(ApiSchema):
 
 class TaskRequest(ApiSchema):
     task: str = Field(min_length=3, max_length=4000)
-    agent_name: Optional[str] = None
-    model_profile: Optional[str] = None
+    agent_name: Optional[str] = Field(default=None, max_length=100, pattern=r"^[a-zA-Z0-9_\-]+$")
+    model_profile: Optional[str] = Field(default=None, max_length=100, pattern=r"^[a-zA-Z0-9_\-]+$")
     context: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -680,14 +683,27 @@ class GoogleAuthRequest(ApiSchema):
 
 
 class EmailRegisterRequest(ApiSchema):
-    email: str
+    email: str = Field(max_length=254)
     password: str = Field(min_length=8, max_length=72)
-    full_name: Optional[str] = None
+    full_name: Optional[str] = Field(default=None, max_length=200)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not _EMAIL_RE.match(v):
+            raise ValueError("Invalid email address")
+        return v
 
 
 class EmailLoginRequest(ApiSchema):
-    email: str
-    password: str = Field(min_length=8, max_length=72)
+    email: str = Field(max_length=254)
+    password: str = Field(min_length=1, max_length=72)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        return v.strip().lower()
 
 
 class UserResponse(ApiSchema):
@@ -712,3 +728,54 @@ class UserProfileResponse(ApiSchema):
     resume_data: Optional[Dict[str, Any]] = None
     preferences: Optional[Dict[str, Any]] = None
     updated_at: Optional[datetime] = None
+
+
+# ── RAG Pipeline ─────────────────────────────────────────────────────────────
+
+class RAGQueryRequest(ApiSchema):
+    query: str = Field(min_length=3, max_length=4000)
+    model_profile: Optional[str] = Field(default=None, max_length=100, pattern=r"^[a-zA-Z0-9_\-]+$")
+    system_prompt: Optional[str] = Field(default=None, max_length=2000)
+    retrieval_top_k: int = Field(default=5, ge=1, le=20)
+
+
+class RAGStageResult(ApiSchema):
+    stage: str
+    state: str
+    latency_ms: float
+    error: Optional[str] = None
+
+
+class RAGQueryResponse(ApiSchema):
+    query: str
+    response: str
+    used_llm: bool
+    provider: str
+    model_profile: str
+    stages: List[RAGStageResult]
+    total_latency_ms: float
+    context_blocks_used: int
+    pii_detected: List[str] = []
+    security_flagged: bool = False
+
+
+# ── PII Detection ─────────────────────────────────────────────────────────────
+
+class PIIDetectRequest(ApiSchema):
+    text: str = Field(min_length=1, max_length=10000)
+    anonymize: bool = False
+
+
+class PIIMatch(ApiSchema):
+    entity_type: str
+    text: str
+    start: int
+    end: int
+    score: float
+
+
+class PIIDetectResponse(ApiSchema):
+    has_pii: bool
+    matches: List[PIIMatch]
+    anonymized_text: Optional[str] = None
+    backend: str

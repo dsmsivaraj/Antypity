@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
+from enum import Enum
 from typing import List, Optional
 
 from .config import Settings
@@ -10,8 +12,42 @@ from .llama_client import LocalLlamaClient
 from .llm_client import LLMClient, LLMResult
 from .local_llm import OllamaClient
 from .llm_adapter import normalize_completion
+from .resilience import get_circuit_breaker
+from .semantic_cache import get_semantic_cache
 
 _logger = logging.getLogger(__name__)
+
+
+class TaskIntent(Enum):
+    FAST = "fast"               # Simple lookup, factual, short answer
+    COMPLEX = "complex"         # Multi-step reasoning, analysis
+    CODE = "code"               # Code generation, debugging
+    CREATIVE = "creative"       # Writing, cover letters, tone rewriting
+    LOCAL = "local"             # Privacy-sensitive, must stay on-device
+
+
+_INTENT_PATTERNS: dict = {
+    TaskIntent.CODE: re.compile(
+        r"\b(code|script|function|bug|debug|implement|program|python|javascript|sql|api)\b", re.I
+    ),
+    TaskIntent.CREATIVE: re.compile(
+        r"\b(write|rewrite|cover letter|tone|email|draft|improve|rephrase|creative)\b", re.I
+    ),
+    TaskIntent.COMPLEX: re.compile(
+        r"\b(analyze|analyse|compare|evaluate|explain|why|how does|strategy|trade.?off)\b", re.I
+    ),
+    TaskIntent.LOCAL: re.compile(
+        r"\b(private|confidential|sensitive|local only|on.?device|no cloud)\b", re.I
+    ),
+}
+
+
+def classify_intent(prompt: str) -> TaskIntent:
+    """Keyword-based intent classification. Returns FAST if no pattern matches."""
+    for intent, pattern in _INTENT_PATTERNS.items():
+        if pattern.search(prompt):
+            return intent
+    return TaskIntent.FAST
 
 
 @dataclass(frozen=True)
@@ -52,9 +88,26 @@ class ModelRouter:
         model_profile: Optional[str],
         prompt: str,
         system_prompt: Optional[str] = None,
+        use_cache: bool = True,
     ) -> tuple[ModelProfile, LLMResult]:
         requested = self.get_profile(model_profile) if model_profile else None
-        profile = requested or self._default_profile()
+        profile = requested or self._default_profile(prompt)
+
+        # Semantic cache check (skip for non-cloud or cache-disabled calls)
+        if use_cache and profile.provider in ("gemini", "azure-openai"):
+            cache = get_semantic_cache()
+            try:
+                from .embeddings_service import get_embedding_service
+                svc = get_embedding_service()
+                if svc.model is not None:
+                    q_emb = svc.encode([prompt])[0]
+                    cached = cache.get(q_emb)
+                    if cached is not None:
+                        return profile, LLMResult(
+                            content=cached, used_llm=True, provider=f"{profile.provider}/cache"
+                        )
+            except Exception:
+                pass  # cache miss on error — proceed normally
 
         # Fallback provider (deterministic) - normalize any output
         if profile.provider == "fallback":
@@ -84,7 +137,17 @@ class ModelRouter:
                     (p for p in self._profiles if p.provider.startswith("ollama") or p.provider == "fallback"),
                     self._profiles[-1],
                 )
-                return self.complete(model_profile=fallback.id, prompt=prompt, system_prompt=system_prompt)
+                return self.complete(model_profile=fallback.id, prompt=prompt, system_prompt=system_prompt, use_cache=False)
+            # Store in semantic cache
+            if use_cache:
+                try:
+                    from .embeddings_service import get_embedding_service
+                    svc = get_embedding_service()
+                    if svc.model is not None:
+                        q_emb = svc.encode([prompt])[0]
+                        get_semantic_cache().put(q_emb, result.content)
+                except Exception:
+                    pass
             return profile, result
 
         # Local LLaMA (llama-cpp)
@@ -122,7 +185,7 @@ class ModelRouter:
         )
         return profile, normalize_completion(res, default_provider=profile.provider)
 
-    def _default_profile(self) -> ModelProfile:
+    def _default_profile(self, prompt: Optional[str] = None) -> ModelProfile:
         # Honour explicit override from DEFAULT_MODEL_PROFILE env var
         configured = self.settings.default_model_profile
         if configured:
@@ -131,7 +194,27 @@ class ModelRouter:
                 return override
             _logger.warning("DEFAULT_MODEL_PROFILE=%r not found — falling back to auto-select.", configured)
 
-        # Priority: Gemini > Azure > Ollama > fallback
+        # Intent-based routing for local-only tasks
+        if prompt:
+            intent = classify_intent(prompt)
+            if intent == TaskIntent.LOCAL:
+                local = next(
+                    (p for p in self._profiles if p.provider in ("llama-cpp", "ollama")),
+                    None,
+                )
+                if local:
+                    _logger.debug("IntentClassifier: LOCAL → %s", local.id)
+                    return local
+            elif intent == TaskIntent.FAST:
+                # Prefer fast/cheap model
+                fast = next(
+                    (p for p in self._profiles if p.mode == "fast" and p.provider != "fallback"),
+                    None,
+                )
+                if fast:
+                    return fast
+
+        # Default priority: Gemini > Azure > Ollama > fallback
         for preferred_provider in ("gemini", "azure-openai"):
             p = next((p for p in self._profiles if p.provider == preferred_provider), None)
             if p:

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .config import Settings
+from .resilience import ExponentialBackoffRetry, get_circuit_breaker
 
 _logger = logging.getLogger(__name__)
 
@@ -22,6 +23,10 @@ class LLMClient:
         self.settings = settings
         self._client = None
         self._client_error: Optional[str] = None
+        self._circuit_breaker = get_circuit_breaker(
+            "azure-openai", failure_threshold=0.5, recovery_timeout=60.0, min_calls=3
+        )
+        self._retry = ExponentialBackoffRetry(max_attempts=2, base_delay=1.0, max_delay=10.0)
 
     @property
     def enabled(self) -> bool:
@@ -49,14 +54,19 @@ class LLMClient:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        try:
+        def _do_call():
             response = client.chat.completions.create(
                 model=deployment or self.settings.azure_openai_deployment,
                 messages=messages,
                 max_tokens=self.settings.max_tokens,
                 timeout=self.settings.request_timeout_seconds,
             )
-            content = response.choices[0].message.content or ""
+            return response.choices[0].message.content or ""
+
+        try:
+            content = self._circuit_breaker.call(
+                lambda: self._retry.execute(_do_call)
+            )
             return LLMResult(content=content, used_llm=True, provider="azure-openai")
         except Exception as exc:
             _logger.error("Azure OpenAI API call failed: %s", exc)

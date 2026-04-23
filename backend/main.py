@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import signal
+import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
@@ -10,6 +13,12 @@ from typing import Optional
 import httpx
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+
+from .resilience import get_all_circuit_breaker_metrics, get_circuit_breaker
 
 from agents.workflow_engine import WorkflowStep
 
@@ -96,9 +105,18 @@ from .schemas import (
     WorkflowExecutionResponse,
     WorkflowStepResult,
     WorkflowStepSchema,
+    RAGQueryRequest,
+    RAGQueryResponse,
+    RAGStageResult,
+    PIIDetectRequest,
+    PIIDetectResponse,
+    PIIMatch,
 )
 
 _logger = logging.getLogger(__name__)
+
+# Rate limiter (keyed by IP; in-memory storage suitable for single-node)
+limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 
 
 # ── Auth helpers ─────────────────────────────────────────────────────────────
@@ -162,6 +180,13 @@ def _require_internal(
 def create_app(container: Optional[AppContainer] = None) -> FastAPI:
     _container = container if container is not None else build_container()
 
+    # Warn loudly if running with default secrets
+    if _container.settings.secret_key in ("change-me-in-production", "", "secret"):
+        _logger.warning(
+            "SECURITY: SECRET_KEY is using default/insecure value. "
+            "Set SECRET_KEY env var to a strong random secret before production."
+        )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.container = _container
@@ -174,6 +199,20 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
         )
         _container.scheduler.start()
         _container.self_healing.start()
+
+        # Graceful SIGTERM shutdown
+        loop = asyncio.get_running_loop()
+
+        def _handle_sigterm():
+            _logger.info("SIGTERM received — initiating graceful shutdown.")
+            loop.stop()
+
+        try:
+            import signal as _signal
+            loop.add_signal_handler(_signal.SIGTERM, _handle_sigterm)
+        except (NotImplementedError, RuntimeError):
+            pass  # Windows or non-main-thread context
+
         yield
         await _container.scheduler.stop()
         await _container.self_healing.stop()
@@ -187,6 +226,10 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
     app.state.container = _container
     _container.internal_api.bind_app(app)
 
+    # Rate limiting
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_container.settings.cors_origins,
@@ -194,6 +237,57 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # ── Observability Middleware ──────────────────────────────────────────
+
+    try:
+        from prometheus_client import Counter, Histogram, CollectorRegistry, generate_latest, CONTENT_TYPE_LATEST
+
+        _prom_registry = CollectorRegistry()
+        _http_requests_total = Counter(
+            "http_requests_total",
+            "Total HTTP requests",
+            ["method", "path", "status"],
+            registry=_prom_registry,
+        )
+        _http_request_duration = Histogram(
+            "http_request_duration_seconds",
+            "HTTP request duration",
+            ["method", "path"],
+            registry=_prom_registry,
+        )
+        _prom_available = True
+    except Exception:
+        _prom_available = False
+
+    @app.middleware("http")
+    async def observability_middleware(request: Request, call_next):
+        # Correlation ID
+        correlation_id = request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
+        t0 = time.monotonic()
+        response = await call_next(request)
+        duration = time.monotonic() - t0
+        response.headers["X-Correlation-ID"] = correlation_id
+
+        # Prometheus instrumentation
+        if _prom_available:
+            path = request.url.path
+            method = request.method
+            status_code = str(response.status_code)
+            try:
+                _http_requests_total.labels(method=method, path=path, status=status_code).inc()
+                _http_request_duration.labels(method=method, path=path).observe(duration)
+            except Exception:
+                pass
+
+        return response
+
+    if _prom_available:
+        @app.get("/metrics/prometheus", tags=["observability"], include_in_schema=False)
+        async def prometheus_metrics():
+            from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+            data = generate_latest(_prom_registry)
+            return Response(content=data, media_type=CONTENT_TYPE_LATEST)
 
     # ── Self-Healing (Gateway to Orchestrator) ──────────────────────────
 
@@ -464,6 +558,94 @@ def _register_routes(app: FastAPI) -> None:
         database_ok = checks.get("database", "ok") == "ok"
         overall = "ready" if checks["registry"] == "ok" and database_ok else "degraded"
         return ReadyResponse(status=overall, checks=checks)
+
+    # ── Resilience ───────────────────────────────────────────────────────
+
+    @app.get("/resilience/circuit-breakers", tags=["resilience"])
+    async def get_circuit_breakers(_: dict = Depends(_require("admin"))):
+        return {"circuit_breakers": get_all_circuit_breaker_metrics()}
+
+    @app.get("/resilience/cache", tags=["resilience"])
+    async def get_cache_stats(_: dict = Depends(_require("admin"))):
+        from .semantic_cache import get_semantic_cache
+        return {"semantic_cache": get_semantic_cache().get_stats()}
+
+    @app.delete("/resilience/cache", status_code=204, tags=["resilience"])
+    async def clear_cache(_: dict = Depends(_require("admin"))):
+        from .semantic_cache import get_semantic_cache
+        get_semantic_cache().clear()
+
+    # ── RAG Pipeline ─────────────────────────────────────────────────────
+
+    @app.post("/rag/query", response_model=RAGQueryResponse, tags=["rag"])
+    async def rag_query(
+        request: Request,
+        body: RAGQueryRequest,
+        _: dict = Depends(_require("execute")),
+    ):
+        from .agent_pipeline import run_rag_pipeline
+        container: AppContainer = request.app.state.container
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: run_rag_pipeline(
+                    query=body.query,
+                    model_router=container.model_router,
+                    model_profile=body.model_profile,
+                    system_prompt=body.system_prompt,
+                    retrieval_top_k=body.retrieval_top_k,
+                ),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return RAGQueryResponse(
+            query=result.query,
+            response=result.response,
+            used_llm=result.used_llm,
+            provider=result.provider,
+            model_profile=result.model_profile,
+            stages=[
+                RAGStageResult(
+                    stage=s.stage,
+                    state=s.state.value,
+                    latency_ms=round(s.latency_ms, 1),
+                    error=s.error,
+                )
+                for s in result.stages
+            ],
+            total_latency_ms=round(result.total_latency_ms, 1),
+            context_blocks_used=len(result.context_blocks),
+            pii_detected=result.pii_detected,
+            security_flagged=result.security_flagged,
+        )
+
+    # ── PII Detection ─────────────────────────────────────────────────────
+
+    @app.post("/pii/detect", response_model=PIIDetectResponse, tags=["pii"])
+    async def detect_pii(
+        request: Request,
+        body: PIIDetectRequest,
+        _: dict = Depends(_require("execute")),
+    ):
+        from .pii_detector import get_pii_detector
+        detector = get_pii_detector()
+        matches = detector.detect(body.text)
+        anonymized = detector.anonymize(body.text) if body.anonymize else None
+        return PIIDetectResponse(
+            has_pii=bool(matches),
+            matches=[
+                PIIMatch(
+                    entity_type=m.entity_type,
+                    text=m.text,
+                    start=m.start,
+                    end=m.end,
+                    score=round(m.score, 3),
+                )
+                for m in matches
+            ],
+            anonymized_text=anonymized,
+            backend=detector.get_status()["backend"],
+        )
 
     # ── Agents (protected: agents:read) ──────────────────────────────────
 
