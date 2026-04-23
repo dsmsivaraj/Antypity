@@ -97,6 +97,13 @@ export interface User {
   status: string
 }
 
+export interface UserProfile {
+  user_id: string
+  resume_filename?: string | null
+  resume_text?: string | null
+  updated_at: string
+}
+
 export interface Session {
   access_token: string
   user: User
@@ -121,6 +128,7 @@ export interface ResumeParseResponse {
 
 export interface UserProfile {
   user_id: string
+  resume_text?: string | null
   resume_data?: ParsedFields | null
   preferences?: Record<string, unknown> | null
   updated_at?: string | null

@@ -90,7 +90,7 @@ class ModelCompletionResponse(ApiSchema):
 # ── Career / Resume / Jobs ──────────────────────────────────────────────────
 
 class ResumeEvaluateRequest(ApiSchema):
-    text: str = Field(min_length=1)
+    text: str = ""
     jd_text: str = ""
     model_profile: Optional[str] = None
 
@@ -140,7 +140,7 @@ class ResumeWriteResponse(ApiSchema):
 
 
 class ResumeReviewRequest(ApiSchema):
-    text: str = Field(min_length=1)
+    text: str = ""
     jd_text: str = ""
     target_role: str = ""
     model_profile: Optional[str] = None
@@ -164,7 +164,7 @@ class ResumeReviewResponse(ApiSchema):
 
 
 class JobHuntRequest(ApiSchema):
-    resume_text: str = Field(min_length=50)
+    resume_text: str = ""
     location: str = "India"
     experience_years: float = 0
     top_count: int = Field(default=25, ge=10, le=50)
@@ -226,7 +226,7 @@ class LiveJobResult(ApiSchema):
 
 
 class LiveJobHuntRequest(ApiSchema):
-    resume_text: str = Field(min_length=1)
+    resume_text: str = ""
     location: str = "India"
     experience_years: float = 0.0
     model_profile: Optional[str] = None
@@ -250,7 +250,7 @@ class ResumeParseResponse(ApiSchema):
 
 
 class ResumeAnalyzeRequest(ApiSchema):
-    text: str = Field(min_length=1)
+    text: str = ""
     jd_text: str = ""
     source_filename: Optional[str] = None
     model_profile: Optional[str] = None
@@ -275,7 +275,7 @@ class ResumeAnalysisResponse(ApiSchema):
 
 class ResumeChatRequest(ApiSchema):
     question: str = Field(min_length=2, max_length=2000)
-    resume_text: str = Field(min_length=1)
+    resume_text: str = ""
     jd_text: str = ""
     model_profile: Optional[str] = None
 
@@ -291,7 +291,7 @@ class ResumeChatResponse(ApiSchema):
 
 
 class CoverLetterRequest(ApiSchema):
-    resume_text: str = Field(min_length=1)
+    resume_text: str = ""
     jd_text: str = ""
     target_role: str = Field(min_length=2, max_length=200)
     company_name: str = Field(default="Hiring Team", min_length=2, max_length=200)
@@ -681,13 +681,13 @@ class GoogleAuthRequest(ApiSchema):
 
 class EmailRegisterRequest(ApiSchema):
     email: str
-    password: str
+    password: str = Field(min_length=8, max_length=72)
     full_name: Optional[str] = None
 
 
 class EmailLoginRequest(ApiSchema):
     email: str
-    password: str
+    password: str = Field(min_length=8, max_length=72)
 
 
 class UserResponse(ApiSchema):
@@ -708,6 +708,7 @@ class TokenResponse(ApiSchema):
 
 class UserProfileResponse(ApiSchema):
     user_id: str
+    resume_text: Optional[str] = None
     resume_data: Optional[Dict[str, Any]] = None
     preferences: Optional[Dict[str, Any]] = None
     updated_at: Optional[datetime] = None

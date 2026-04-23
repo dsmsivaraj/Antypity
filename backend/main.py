@@ -260,7 +260,8 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
         pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
         if container.database_client.get_user_by_email(body.email):
             raise HTTPException(status_code=409, detail="Email already registered. Please sign in.")
-        pw_hash = pwd_ctx.hash(body.password)
+        # Defensive truncation for bcrypt 72-byte limit
+        pw_hash = pwd_ctx.hash(body.password[:72])
         user = container.database_client.create_user_with_password(
             email=body.email, full_name=body.full_name, password_hash=pw_hash
         )
@@ -280,7 +281,8 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
         from passlib.context import CryptContext
         pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
         user = container.database_client.get_user_by_email(body.email)
-        if not user or not user.get("password_hash") or not pwd_ctx.verify(body.password, user["password_hash"]):
+        # Defensive truncation for bcrypt 72-byte limit
+        if not user or not user.get("password_hash") or not pwd_ctx.verify(body.password[:72], user["password_hash"]):
             raise HTTPException(status_code=401, detail="Invalid email or password.")
         from .jwt_utils import create_access_token
         token = create_access_token({"sub": user["id"], "email": user["email"], "role": user.get("role", "applicant")})
@@ -320,6 +322,30 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
                 _logger.error("Get me proxy failed: %s", exc)
                 raise HTTPException(status_code=401, detail="Invalid session.")
 
+    @app.get("/users/me/profile", tags=["users"])
+    async def proxy_get_me_profile(request: Request, token: str = Query(...)):
+        url = os.environ.get("IDENTITY_SERVICE_URL", "http://localhost:9504")
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(f"{url}/users/me/profile", params={"token": token})
+                response.raise_for_status()
+                return response.json()
+            except Exception as exc:
+                _logger.error("Get profile proxy failed: %s", exc)
+                raise HTTPException(status_code=401, detail="Invalid session.")
+
+    @app.patch("/users/me/profile", tags=["users"])
+    async def proxy_update_me_profile(request: Request, body: dict, token: str = Query(...)):
+        url = os.environ.get("IDENTITY_SERVICE_URL", "http://localhost:9504")
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.patch(f"{url}/users/me/profile", json=body, params={"token": token})
+                response.raise_for_status()
+                return response.json()
+            except Exception as exc:
+                _logger.error("Update profile proxy failed: %s", exc)
+                raise HTTPException(status_code=401, detail="Invalid session.")
+
     @app.get("/users/me/profile", response_model=UserProfileResponse, tags=["users"])
     async def get_my_profile(request: Request, authorization: Optional[str] = Header(None)):
         container: AppContainer = request.app.state.container
@@ -339,6 +365,7 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
             return UserProfileResponse(user_id=user_id)
         return UserProfileResponse(
             user_id=profile["user_id"],
+            resume_text=profile.get("resume_text"),
             resume_data=profile.get("resume_data"),
             preferences=profile.get("preferences"),
             updated_at=datetime.fromisoformat(profile["updated_at"]) if profile.get("updated_at") else None,
@@ -365,6 +392,7 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
         profile = container.database_client.get_user_profile(user_id) or {"user_id": user_id}
         return UserProfileResponse(
             user_id=profile["user_id"],
+            resume_text=profile.get("resume_text"),
             resume_data=profile.get("resume_data"),
             preferences=profile.get("preferences"),
             updated_at=datetime.fromisoformat(profile["updated_at"]) if profile.get("updated_at") else None,
@@ -375,6 +403,24 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
+
+def _get_stored_resume_text(authorization: Optional[str], container) -> str:
+    """Return the user's stored base resume text if JWT present and DB configured, else ''."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return ""
+    if not container.database_client.is_configured:
+        return ""
+    try:
+        from .jwt_utils import decode_access_token
+        payload = decode_access_token(authorization.removeprefix("Bearer ").strip())
+        user_id = payload.get("sub", "")
+        if not user_id:
+            return ""
+        profile = container.database_client.get_user_profile(user_id)
+        return (profile or {}).get("resume_text") or ""
+    except Exception:
+        return ""
+
 
 def _register_routes(app: FastAPI) -> None:
 
@@ -991,6 +1037,7 @@ def _register_routes(app: FastAPI) -> None:
                 if user_id and container.database_client.is_configured:
                     container.database_client.upsert_user_profile(
                         user_id=user_id,
+                        resume_text=parsed.text,
                         resume_data=parsed.parsed_fields,
                     )
             except Exception:
@@ -1007,11 +1054,15 @@ def _register_routes(app: FastAPI) -> None:
     async def analyze_resume(
         request: Request,
         body: ResumeAnalyzeRequest,
+        authorization: Optional[str] = Header(None),
         principal: dict = Depends(_require("execute")),
     ):
         container: AppContainer = request.app.state.container
+        resume_text = body.text or _get_stored_resume_text(authorization, container)
+        if not resume_text:
+            raise HTTPException(status_code=400, detail="No resume text provided and no base resume on file. Upload a resume first.")
         record = container.career_service.analyze_resume(
-            resume_text=body.text,
+            resume_text=resume_text,
             jd_text=body.jd_text,
             model_profile=body.model_profile,
             source_filename=body.source_filename,
@@ -1042,12 +1093,16 @@ def _register_routes(app: FastAPI) -> None:
     async def resume_chat(
         request: Request,
         body: ResumeChatRequest,
+        authorization: Optional[str] = Header(None),
         _: dict = Depends(_require("execute")),
     ):
         container: AppContainer = request.app.state.container
+        resume_text = body.resume_text or _get_stored_resume_text(authorization, container)
+        if not resume_text:
+            raise HTTPException(status_code=400, detail="No resume text provided and no base resume on file.")
         result = container.career_service.chat_resume(
             question=body.question,
-            resume_text=body.resume_text,
+            resume_text=resume_text,
             jd_text=body.jd_text,
             model_profile=body.model_profile,
         )
@@ -1175,11 +1230,15 @@ def _register_routes(app: FastAPI) -> None:
     async def evaluate_resume(
         request: Request,
         body: ResumeEvaluateRequest,
+        authorization: Optional[str] = Header(None),
         _: dict = Depends(_require("execute")),
     ):
         container: AppContainer = request.app.state.container
+        resume_text = body.text or _get_stored_resume_text(authorization, container)
+        if not resume_text:
+            raise HTTPException(status_code=400, detail="No resume text provided and no base resume on file.")
         result = container.career_service.evaluate_resume(
-            resume_text=body.text,
+            resume_text=resume_text,
             jd_text=body.jd_text,
             model_profile=body.model_profile,
         )
@@ -1189,11 +1248,12 @@ def _register_routes(app: FastAPI) -> None:
     async def write_resume(
         request: Request,
         body: ResumeWriteRequest,
+        authorization: Optional[str] = Header(None),
         _: dict = Depends(_require("execute")),
     ):
         container: AppContainer = request.app.state.container
         result = container.career_service.write_resume(
-            resume_text=body.resume_text,
+            resume_text=body.resume_text or _get_stored_resume_text(authorization, container),
             jd_text=body.jd_text,
             target_role=body.target_role,
             section=body.section,
@@ -1206,11 +1266,15 @@ def _register_routes(app: FastAPI) -> None:
     async def review_resume(
         request: Request,
         body: ResumeReviewRequest,
+        authorization: Optional[str] = Header(None),
         _: dict = Depends(_require("execute")),
     ):
         container: AppContainer = request.app.state.container
+        resume_text = body.text or _get_stored_resume_text(authorization, container)
+        if not resume_text:
+            raise HTTPException(status_code=400, detail="No resume text provided and no base resume on file.")
         result = container.career_service.review_resume(
-            resume_text=body.text,
+            resume_text=resume_text,
             jd_text=body.jd_text,
             target_role=body.target_role,
             model_profile=body.model_profile,
@@ -1221,11 +1285,15 @@ def _register_routes(app: FastAPI) -> None:
     async def create_cover_letter(
         request: Request,
         body: CoverLetterRequest,
+        authorization: Optional[str] = Header(None),
         principal: dict = Depends(_require("execute")),
     ):
         container: AppContainer = request.app.state.container
+        resume_text = body.resume_text or _get_stored_resume_text(authorization, container)
+        if not resume_text:
+            raise HTTPException(status_code=400, detail="No resume text provided and no base resume on file.")
         result = container.career_service.create_cover_letter(
-            resume_text=body.resume_text,
+            resume_text=resume_text,
             jd_text=body.jd_text,
             target_role=body.target_role,
             company_name=body.company_name,
@@ -1240,11 +1308,12 @@ def _register_routes(app: FastAPI) -> None:
     async def hunt_jobs(
         request: Request,
         body: JobHuntRequest,
+        authorization: Optional[str] = Header(None),
         _: dict = Depends(_require("execute")),
     ):
         container: AppContainer = request.app.state.container
         result = container.career_service.hunt_jobs(
-            resume_text=body.resume_text,
+            resume_text=body.resume_text or _get_stored_resume_text(authorization, container),
             location=body.location,
             experience_years=body.experience_years,
             top_count=body.top_count,
@@ -1267,11 +1336,12 @@ def _register_routes(app: FastAPI) -> None:
     async def live_hunt_jobs(
         request: Request,
         body: LiveJobHuntRequest,
+        authorization: Optional[str] = Header(None),
         _: dict = Depends(_require("execute")),
     ):
         container: AppContainer = request.app.state.container
         result = await container.career_service.live_hunt_jobs(
-            resume_text=body.resume_text,
+            resume_text=body.resume_text or _get_stored_resume_text(authorization, container),
             location=body.location,
             experience_years=body.experience_years,
             model_profile=body.model_profile,

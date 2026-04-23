@@ -75,12 +75,16 @@ export function setStoredApiKey(value: string): void {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const apiKey = getStoredApiKey()
+  const jwt = getStoredJwt()
   const headers = new Headers(init?.headers)
   if (!headers.has('Content-Type') && !(init?.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json')
   }
   if (apiKey) {
     headers.set('X-API-Key', apiKey)
+  }
+  if (jwt && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${jwt}`)
   }
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -130,6 +134,12 @@ export const api = {
       body: JSON.stringify({ provider, token, email, full_name: name, social_id: socialId }),
     }),
   getMe: (token: string) => request<Session['user']>(`/users/me?token=${encodeURIComponent(token)}`),
+  getMeProfile: (token: string) => request<UserProfile>(`/users/me/profile?token=${encodeURIComponent(token)}`),
+  updateMeProfile: (token: string, body: Partial<UserProfile>) =>
+    request<{ message: string }>('/users/me/profile?token=' + encodeURIComponent(token), {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
   googleAuth: (idToken: string) =>
     request<{ access_token: string; token_type: string; user: User }>('/auth/google', {
       method: 'POST',

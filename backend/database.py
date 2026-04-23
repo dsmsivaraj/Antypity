@@ -178,10 +178,12 @@ class PostgreSQLDatabaseClient:
             "user_profiles",
             self._metadata,
             _str("user_id", primary_key=True),
+            _str("resume_filename", nullable=True),
+            Column("resume_text", String, nullable=True),
             Column("resume_data", JSON, nullable=True),
             Column("onboarding_metadata", JSON, nullable=True),
             Column("preferences", JSON, nullable=True),
-            Column("embedding", JSON, nullable=True), # Store as JSON/List for now, or use pgvector types
+            Column("embedding", JSON, nullable=True),
             Column("updated_at", DateTime(timezone=True), nullable=False),
         )
 
@@ -307,6 +309,7 @@ class PostgreSQLDatabaseClient:
             "ALTER TABLE resume_analyses ADD COLUMN IF NOT EXISTS source_filename VARCHAR",
             "ALTER TABLE resume_analyses ADD COLUMN IF NOT EXISTS parsed_fields JSONB",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT",
+            "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS resume_text TEXT",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_social ON users(social_provider, social_id) WHERE social_provider IS NOT NULL AND social_id IS NOT NULL",
             """
             CREATE TABLE IF NOT EXISTS retrieval_metrics (
@@ -1081,25 +1084,21 @@ class PostgreSQLDatabaseClient:
         self,
         *,
         user_id: str,
+        resume_text: Optional[str] = None,
         resume_data: Optional[Dict[str, Any]] = None,
         preferences: Optional[Dict[str, Any]] = None,
     ) -> None:
         now = datetime.now(timezone.utc)
-        record: Dict[str, Any] = {
-            "user_id": user_id,
-            "updated_at": now,
-        }
-        if resume_data is not None:
-            record["resume_data"] = resume_data
-        if preferences is not None:
-            record["preferences"] = preferences
         set_clause: Dict[str, Any] = {"updated_at": now}
+        if resume_text is not None:
+            set_clause["resume_text"] = resume_text
         if resume_data is not None:
             set_clause["resume_data"] = resume_data
         if preferences is not None:
             set_clause["preferences"] = preferences
         stmt = pg_insert(self.user_profiles).values(
             user_id=user_id,
+            resume_text=resume_text,
             resume_data=resume_data,
             onboarding_metadata=None,
             preferences=preferences,

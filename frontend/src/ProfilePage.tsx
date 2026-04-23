@@ -4,7 +4,7 @@ import { useAuth } from './AuthContext'
 import type { ParsedFields, UserProfile } from './types'
 
 interface ProfilePageProps {
-  onNavigateToResume: () => void
+  onNavigateToResume: (resumeText?: string) => void
 }
 
 export function ProfilePage({ onNavigateToResume }: ProfilePageProps) {
@@ -14,6 +14,7 @@ export function ProfilePage({ onNavigateToResume }: ProfilePageProps) {
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState('')
   const [uploadSuccess, setUploadSuccess] = useState('')
+  const [showResumeText, setShowResumeText] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -103,16 +104,39 @@ export function ProfilePage({ onNavigateToResume }: ProfilePageProps) {
                   'Upload Resume'
                 )}
               </button>
-              {resumeData && (
-                <button className="btn btn-outline-secondary btn-sm" onClick={onNavigateToResume}>
-                  Analyze
-                </button>
+              {profile?.resume_text && (
+                <>
+                  <button
+                    className="btn btn-outline-secondary btn-sm"
+                    onClick={() => setShowResumeText(v => !v)}
+                  >
+                    {showResumeText ? 'Hide Text' : 'View Text'}
+                  </button>
+                  <button
+                    className="btn btn-outline-primary btn-sm"
+                    onClick={() => onNavigateToResume(profile.resume_text ?? undefined)}
+                  >
+                    Analyze
+                  </button>
+                </>
               )}
             </div>
           </div>
 
           {uploadError && <div className="alert alert-danger py-2 small mb-3">{uploadError}</div>}
           {uploadSuccess && <div className="alert alert-success py-2 small mb-3">{uploadSuccess}</div>}
+
+          {showResumeText && profile?.resume_text && (
+            <div className="mb-3">
+              <div className="small text-secondary text-uppercase fw-semibold mb-1">Stored Resume Text</div>
+              <pre
+                className="small border rounded-3 p-3 bg-body-tertiary"
+                style={{ maxHeight: 300, overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+              >
+                {profile.resume_text}
+              </pre>
+            </div>
+          )}
 
           {resumeData ? (
             <div className="row g-3">

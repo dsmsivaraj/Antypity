@@ -32,7 +32,7 @@ type PageKey = 'overview' | 'resume' | 'jobs' | 'templates' | 'chat' | 'login' |
 const INITIAL_CONTEXT = '{\n  "priority": "normal",\n  "channel": "web"\n}'
 
 function App() {
-  const { user } = useAuth()
+  const { user, jwt } = useAuth()
   const [page, setPage] = useState<PageKey>('overview')
   const [agents, setAgents] = useState<AgentSummary[]>([])
   const [models, setModels] = useState<ModelSummary[]>([])
@@ -160,6 +160,24 @@ function App() {
     setStoredApiKey(apiKey)
   }, [apiKey])
 
+  // Auto-load stored base resume when user logs in
+  useEffect(() => {
+    if (!jwt || resumeText) return
+    api.getMeProfile(jwt)
+      .then(profile => {
+
+        if (profile.resume_text) {
+          setResumeText(profile.resume_text)
+          if (profile.resume_filename) {
+            setResumeFilename(profile.resume_filename)
+          } else {
+            setResumeFilename('stored resume')
+          }
+        }
+      })
+      .catch(() => {})
+  }, [jwt]) // eslint-disable-line react-hooks/exhaustive-deps
+
   async function handleBootstrap(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setBootError('')
@@ -227,9 +245,20 @@ function App() {
     setLoading(true)
     setSubmitError('')
     try {
-      const parsed = await api.parseResume(file)
+      const parsed = jwt
+        ? await api.parseResumeAuthenticated(file, jwt)
+        : await api.parseResume(file)
       setResumeFilename(parsed.filename)
       setResumeText(parsed.text)
+      
+      // Persist to profile if logged in
+      if (jwt) {
+        await api.updateMeProfile(jwt, {
+          resume_filename: parsed.filename,
+          resume_text: parsed.text
+        }).catch(err => console.error('Failed to persist resume:', err))
+      }
+
       const analysis = await api.analyzeResume(parsed.text, jdText, parsed.filename, preferredResumeModel(localModels))
       setResumeAnalysis(analysis)
       if (analysis.ats_keywords.length) {
@@ -627,7 +656,10 @@ function App() {
         ) : null}
 
         {page === 'profile' ? (
-          <ProfilePage onNavigateToResume={() => setPage('resume')} />
+          <ProfilePage onNavigateToResume={(text?: string) => {
+            if (text) setResumeText(text)
+            setPage('resume')
+          }} />
         ) : null}
       </div>
 
@@ -878,14 +910,31 @@ function ResumePage(props: {
             <div className="text-uppercase small text-secondary fw-semibold">Resume Lab</div>
             <h2 className="section-title h4 mb-3">Local resume and JD analysis</h2>
             <div className="mb-3">
-              <label htmlFor="resume-file-input" className="form-label">Upload resume</label>
-              <input
-                id="resume-file-input"
-                type="file"
-                className="form-control"
-                onChange={props.handleResumeUpload}
-                accept=".pdf,.docx,.txt"
-              />
+              <label htmlFor="resume-file-input" className="form-label">
+                {props.resumeText ? 'Replace resume' : 'Upload resume'}
+              </label>
+              <div className="d-flex gap-2 align-items-center">
+                <input
+                  id="resume-file-input"
+                  type="file"
+                  className="form-control"
+                  onChange={props.handleResumeUpload}
+                  accept=".pdf,.docx,.txt"
+                />
+                {props.resumeText ? (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-outline-danger"
+                    onClick={() => {
+                      props.setResumeText('')
+                      // @ts-ignore
+                      if (document.getElementById('resume-file-input')) document.getElementById('resume-file-input').value = ''
+                    }}
+                  >
+                    Clear
+                  </button>
+                ) : null}
+              </div>
               {props.resumeFilename ? <div className="small text-secondary mt-2">Loaded: {props.resumeFilename}</div> : null}
             </div>
             <form onSubmit={props.handleResumeAnalysis}>
