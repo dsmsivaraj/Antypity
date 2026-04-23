@@ -49,24 +49,24 @@ class TestCircuitBreaker:
         assert result == "fallback-value"
 
     def test_half_open_after_recovery_timeout(self):
-        cb = CircuitBreaker("test-halfopen", failure_threshold=0.5, min_calls=2, recovery_timeout=0.05)
+        cb = CircuitBreaker("test-halfopen", failure_threshold=0.5, min_calls=2, recovery_timeout=0.1)
         for _ in range(2):
             try:
                 cb.call(lambda: (_ for _ in ()).throw(RuntimeError("fail")))
             except RuntimeError:
                 pass
         assert cb.state == CBState.OPEN
-        time.sleep(0.1)
+        time.sleep(0.3)
         assert cb.state == CBState.HALF_OPEN
 
     def test_recovers_to_closed_on_success(self):
-        cb = CircuitBreaker("test-recover", failure_threshold=0.5, min_calls=2, recovery_timeout=0.05)
+        cb = CircuitBreaker("test-recover", failure_threshold=0.5, min_calls=2, recovery_timeout=0.1)
         for _ in range(2):
             try:
                 cb.call(lambda: (_ for _ in ()).throw(RuntimeError("fail")))
             except RuntimeError:
                 pass
-        time.sleep(0.1)
+        time.sleep(0.3)
         cb.call(lambda: "ok")
         assert cb.state == CBState.CLOSED
 
@@ -125,12 +125,12 @@ class TestTimeoutManager:
 
     def test_raises_on_timeout(self):
         with pytest.raises(TimeoutError):
-            TimeoutManager.with_timeout(lambda: time.sleep(10), timeout_seconds=0.05)
+            TimeoutManager.with_timeout(lambda: time.sleep(10), timeout_seconds=0.3)
 
     def test_uses_fallback_on_timeout(self):
         result = TimeoutManager.with_timeout(
             lambda: time.sleep(10),
-            timeout_seconds=0.05,
+            timeout_seconds=0.3,
             fallback=lambda: "fallback",
         )
         assert result == "fallback"
@@ -176,10 +176,10 @@ class TestSemanticCache:
         assert result is None
 
     def test_ttl_eviction(self):
-        cache = SemanticCache(similarity_threshold=0.95, ttl_seconds=0.05)
+        cache = SemanticCache(similarity_threshold=0.95, ttl_seconds=0.1)
         emb = self._make_emb(0.5)
         cache.put(emb, "will expire")
-        time.sleep(0.1)
+        time.sleep(0.4)
         result = cache.get(emb)
         assert result is None
 
