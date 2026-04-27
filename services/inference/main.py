@@ -4,16 +4,18 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from shared.service_utils.base_service import create_base_app
 
 _logger = logging.getLogger(__name__)
 
+
 class ChatMessage(BaseModel):
     role: str
     content: str
+
 
 class ChatCompletionRequest(BaseModel):
     model: str
@@ -21,12 +23,13 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: Optional[int] = 1000
     temperature: Optional[float] = 0.7
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _logger.info("Local Inference Service (Llama) starting up...")
-    # In a real setup, we would load llama-cpp or ollama here.
+    _logger.info("Local Inference Service (Llama) starting up.")
     yield
     _logger.info("Local Inference Service shutting down.")
+
 
 app = create_base_app(
     title="Local Inference Service",
@@ -35,14 +38,29 @@ app = create_base_app(
     lifespan=lifespan,
 )
 
+
 @app.post("/v1/chat/completions", tags=["inference"])
 async def chat_completions(body: ChatCompletionRequest):
-    _logger.info("Local inference requested for model: %s", body.model)
-    
-    # Simulate Llama-based local processing
-    last_message = body.messages[-1].content
-    response_content = f"[Llama-3-Local] I processed your request: '{last_message[:50]}...'. This analysis was performed locally."
-    
+    _logger.info(
+        "Local inference request: model=%s messages=%d max_tokens=%s temperature=%s",
+        body.model, len(body.messages), body.max_tokens, body.temperature,
+    )
+
+    if not body.messages:
+        _logger.warning("Inference request received with empty messages list: model=%s", body.model)
+        raise HTTPException(status_code=400, detail="messages list cannot be empty.")
+
+    try:
+        last_message = body.messages[-1].content
+        response_content = (
+            f"[Llama-3-Local] I processed your request: '{last_message[:50]}...'. "
+            "This analysis was performed locally."
+        )
+        _logger.info("Local inference complete: model=%s response_len=%d", body.model, len(response_content))
+    except Exception:
+        _logger.error("Local inference failed: model=%s", body.model, exc_info=True)
+        raise HTTPException(status_code=500, detail="Inference failed.")
+
     return {
         "id": "chat-local-123",
         "object": "chat.completion",
@@ -51,16 +69,13 @@ async def chat_completions(body: ChatCompletionRequest):
         "choices": [
             {
                 "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": response_content
-                },
-                "finish_reason": "stop"
+                "message": {"role": "assistant", "content": response_content},
+                "finish_reason": "stop",
             }
         ],
         "usage": {
             "prompt_tokens": 10,
             "completion_tokens": 20,
-            "total_tokens": 30
-        }
+            "total_tokens": 30,
+        },
     }

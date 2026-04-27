@@ -365,17 +365,19 @@ def _safe_json(text: str, default: Any = None) -> Any:
 
 def _compute_fit_score(candidate_skills: List[str], candidate_education: str,
                        experience_years: float, company: Dict[str, Any],
-                       target_roles: List[str]) -> int:
+                       target_roles: List[str]) -> Dict[str, Any]:
     score = 0
     skill_kws = " ".join(candidate_skills).lower()
-    company_roles = " ".join(company.get("roles", [])).lower()
+    company_roles_text = " ".join(company.get("roles", [])).lower()
 
     # Role relevance — 35 pts
+    role_matched = False
     for role in target_roles:
-        if any(r.lower() in company_roles for r in role.split()):
+        if any(r.lower() in company_roles_text for r in role.split()):
             score += 35
+            role_matched = True
             break
-    else:
+    if not role_matched:
         score += 10
 
     # Sector alignment — 25 pts
@@ -389,7 +391,7 @@ def _compute_fit_score(candidate_skills: List[str], candidate_education: str,
     else:
         score += 8
 
-    # Entry-level friendliness — 25 pts (MNCs and big startups have structured programs)
+    # Entry-level friendliness — 25 pts
     company_type = company.get("type", "")
     if experience_years <= 1:
         if company_type == "MNC":
@@ -405,11 +407,64 @@ def _compute_fit_score(candidate_skills: List[str], candidate_education: str,
     else:
         score += 20
 
-    # Skills match — 15 pts
-    tech_overlap = sum(1 for skill in candidate_skills[:10] if skill.lower() in company_roles)
-    score += min(15, tech_overlap * 5)
+    # Skills match — 15 pts; also collect matched/missing keywords
+    matched_keywords = [
+        skill.title()
+        for skill in candidate_skills[:20]
+        if skill.lower() in company_roles_text
+    ]
+    score += min(15, len(matched_keywords) * 5)
+    final_score = min(100, score)
 
-    return min(100, score)
+    # Missing: role words the candidate doesn't have
+    role_words = [
+        w for w in company_roles_text.split()
+        if len(w) > 3 and w.isalpha() and w not in skill_kws
+    ]
+    # Deduplicate preserving order
+    seen: set = set()
+    missing_keywords = []
+    for w in role_words:
+        if w not in seen:
+            seen.add(w)
+            missing_keywords.append(w.title())
+        if len(missing_keywords) >= 8:
+            break
+
+    # ATS summary
+    if final_score >= 70:
+        ats_summary = (
+            f"Strong match — your profile aligns well with {company['name']}'s "
+            f"{company.get('type', '')} hiring requirements."
+        )
+    elif final_score >= 45:
+        ats_summary = (
+            f"Good potential — you meet the core criteria for {company['name']}. "
+            "Minor gaps are bridgeable."
+        )
+    else:
+        ats_summary = (
+            f"Stretch role — targeted upskilling recommended before applying to {company['name']}."
+        )
+
+    # JD snippet from company catalogue
+    roles_list = company.get("roles", [])
+    locations_list = company.get("locations", [])
+    jd_snippet = (
+        f"{company['name']} ({company.get('type', '')}) is hiring for: "
+        f"{', '.join(roles_list[:4])}. "
+        f"Locations: {', '.join(locations_list[:3])}. "
+        f"Package: ₹{company.get('package_lpa', 'N/A')} LPA. "
+        f"Sector: {sector.replace('_', ' ').title()}."
+    )
+
+    return {
+        "score": final_score,
+        "matched_keywords": matched_keywords,
+        "missing_keywords": missing_keywords,
+        "ats_summary": ats_summary,
+        "jd_snippet": jd_snippet,
+    }
 
 
 def _portal_search_url(company: Dict[str, Any], role: str) -> str:
@@ -502,16 +557,16 @@ class JobApplicantAgent(BaseAgent):
         for company in INDIA_COMPANIES:
             if company["sector"] == "job_portal":
                 continue
-            score = _compute_fit_score(
+            fit = _compute_fit_score(
                 candidate_skills=candidate_skills,
                 candidate_education=candidate_education,
                 experience_years=exp_years,
                 company=company,
                 target_roles=target_roles,
             )
-            scored_companies.append({**company, "fit_score": score})
+            scored_companies.append({**company, **fit})
 
-        scored_companies.sort(key=lambda c: c["fit_score"], reverse=True)
+        scored_companies.sort(key=lambda c: c["score"], reverse=True)
 
         # Step 3: Build job opportunities list (20+ entries)
         opportunities = []
@@ -521,6 +576,7 @@ class JobApplicantAgent(BaseAgent):
                 company["roles"][0] if company["roles"] else "Engineer",
             )
             apply_url = _portal_search_url(company, best_role)
+            fit_score = company["score"]
             opportunities.append({
                 "id": str(uuid4()),
                 "company": company["name"],
@@ -531,13 +587,19 @@ class JobApplicantAgent(BaseAgent):
                 "location": company["locations"][0] if company["locations"] else "India",
                 "apply_url": apply_url,
                 "career_url": company["career_url"],
-                "fit_score": company["fit_score"],
+                "fit_score": fit_score,
                 "package_lpa": company["package_lpa"],
                 "tier": (
-                    "high" if company["fit_score"] >= 70
-                    else "medium" if company["fit_score"] >= 45
+                    "high" if fit_score >= 70
+                    else "medium" if fit_score >= 45
                     else "stretch"
                 ),
+                "matched_keywords": company.get("matched_keywords", []),
+                "missing_keywords": company.get("missing_keywords", []),
+                "ats_summary": company.get("ats_summary", ""),
+                "jd_snippet": company.get("jd_snippet", ""),
+                "all_roles": company.get("roles", []),
+                "all_locations": company.get("locations", []),
             })
 
         # Add job-portal search links to reach 20+ total
@@ -598,6 +660,7 @@ class JobApplicantAgent(BaseAgent):
         )
         for i, job in enumerate(opportunities[:5], 1):
             output += f"  {i}. {job['company']} — {job['role']} [{job['fit_score']}/100]\n"
+            output += f"     ATS: {job['ats_summary']}\n"
             output += f"     Apply: {job['apply_url']}\n"
 
         return AgentResult(

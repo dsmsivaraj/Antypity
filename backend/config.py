@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 ENV_PATH = ROOT_DIR / ".env"
-load_dotenv(ENV_PATH)
+load_dotenv(ENV_PATH, override=True)
 
 
 def _split_csv(raw_value: str) -> List[str]:

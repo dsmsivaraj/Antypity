@@ -37,60 +37,160 @@ function ScoreBar({ score, max = 100 }: { score: number; max?: number }) {
   )
 }
 
-function JobCard({ job, rank }: { job: JobOpportunity; rank?: number }) {
+function JobCard({ job, rank, expanded, onToggle }: {
+  job: JobOpportunity
+  rank?: number
+  expanded: boolean
+  onToggle: () => void
+}) {
   const tierColor = TIER_COLOR[job.tier] || '#6b7280'
   const tierBg = TIER_BG[job.tier] || '#f9fafb'
+  const pct = job.fit_score
+  const barColor = pct >= 70 ? '#16a34a' : pct >= 45 ? '#d97706' : '#ef4444'
+  const matched = job.matched_keywords ?? []
+  const missing = job.missing_keywords ?? []
+  const allRoles = job.all_roles ?? []
+  const allLocations = job.all_locations ?? []
+
   return (
     <div style={{
       border: `1px solid ${tierColor}30`,
       borderLeft: `4px solid ${tierColor}`,
       borderRadius: 10,
-      padding: '14px 16px',
       background: tierBg,
       marginBottom: 10,
+      overflow: 'hidden',
     }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            {rank && <span style={{ background: '#1e40af', color: '#fff', borderRadius: 12, padding: '1px 8px', fontSize: 11, fontWeight: 700 }}>#{rank}</span>}
-            <span style={{ fontWeight: 700, fontSize: 15 }}>{job.company}</span>
-            <span style={{
-              background: tierColor + '20',
-              color: tierColor,
-              border: `1px solid ${tierColor}`,
-              borderRadius: 12,
-              padding: '1px 8px',
-              fontSize: 11,
-              fontWeight: 700,
-              textTransform: 'uppercase',
-            }}>{job.tier}</span>
+      {/* ── Header row (always visible, click to expand) ── */}
+      <div onClick={onToggle} style={{ padding: '12px 16px', cursor: 'pointer' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+              {rank && (
+                <span style={{ background: '#1e40af', color: '#fff', borderRadius: 12, padding: '1px 8px', fontSize: 11, fontWeight: 700 }}>
+                  #{rank}
+                </span>
+              )}
+              <span style={{ fontWeight: 700, fontSize: 15 }}>{job.company}</span>
+              <span style={{
+                background: tierColor + '20',
+                color: tierColor,
+                border: `1px solid ${tierColor}`,
+                borderRadius: 12,
+                padding: '1px 8px',
+                fontSize: 11,
+                fontWeight: 700,
+                textTransform: 'uppercase' as const,
+              }}>{job.tier}</span>
+            </div>
+            <div style={{ color: '#374151', fontSize: 13, marginBottom: 2 }}>
+              <strong>{job.role}</strong> &nbsp;·&nbsp; {job.company_type} &nbsp;·&nbsp; {job.location}
+            </div>
+            <div style={{ color: '#6b7280', fontSize: 12 }}>
+              {job.sector.replace(/_/g, ' ')} &nbsp;·&nbsp; ₹{job.package_lpa} LPA
+            </div>
           </div>
-          <div style={{ color: '#374151', fontSize: 13, marginBottom: 4 }}>
-            <strong>{job.role}</strong> &nbsp;·&nbsp; {job.company_type} &nbsp;·&nbsp; {job.location}
-          </div>
-          <div style={{ color: '#6b7280', fontSize: 12 }}>
-            {job.sector.replace(/_/g, ' ')} &nbsp;·&nbsp; ₹{job.package_lpa} LPA
+
+          {/* ATS score + chevron */}
+          <div style={{ display: 'flex', flexDirection: 'column' as const, alignItems: 'flex-end', gap: 4, minWidth: 100 }}>
+            <div style={{ fontWeight: 800, fontSize: 22, color: barColor, lineHeight: 1 }}>
+              {job.fit_score}
+              <span style={{ fontSize: 11, fontWeight: 400, color: '#6b7280' }}>/100</span>
+            </div>
+            <div style={{ fontSize: 11, color: '#6b7280' }}>ATS match</div>
+            <span style={{ fontSize: 14, color: '#6b7280', marginTop: 2 }}>{expanded ? '▲' : '▼'}</span>
           </div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, minWidth: 110 }}>
-          <div style={{ fontWeight: 700, fontSize: 20, color: tierColor }}>{job.fit_score}<span style={{ fontSize: 12, fontWeight: 400, color: '#6b7280' }}>/100</span></div>
-          <a
-            href={job.apply_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              background: tierColor,
-              color: '#fff',
-              borderRadius: 6,
-              padding: '6px 14px',
-              fontWeight: 600,
-              fontSize: 13,
-              textDecoration: 'none',
-              whiteSpace: 'nowrap',
-            }}
-          >Apply Now →</a>
+
+        {/* ATS score bar */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+          <div style={{ flex: 1, background: '#e5e7eb', borderRadius: 4, height: 6 }}>
+            <div style={{ width: `${pct}%`, background: barColor, borderRadius: 4, height: 6, transition: 'width .4s' }} />
+          </div>
+          <span style={{ fontSize: 11, color: '#6b7280', minWidth: 110, textAlign: 'right' as const }}>
+            {pct >= 70 ? 'Strong match' : pct >= 45 ? 'Good potential' : 'Stretch role'}
+          </span>
         </div>
       </div>
+
+      {/* ── Expanded details ── */}
+      {expanded && (
+        <div style={{ padding: '0 16px 16px', borderTop: '1px solid #e5e7eb' }}>
+
+          {/* ATS summary */}
+          {job.ats_summary && (
+            <p style={{ fontSize: 13, color: '#374151', margin: '12px 0 10px', fontStyle: 'italic' }}>
+              {job.ats_summary}
+            </p>
+          )}
+
+          {/* Keyword grids */}
+          {(matched.length > 0 || missing.length > 0) && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+              <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: 10 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#15803d', marginBottom: 6 }}>
+                  Matched Keywords ({matched.length})
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap' as const, gap: 4 }}>
+                  {matched.slice(0, 12).map(k => (
+                    <span key={k} style={{ background: '#dcfce7', color: '#166534', borderRadius: 8, padding: '1px 7px', fontSize: 11 }}>{k}</span>
+                  ))}
+                  {matched.length > 12 && <span style={{ fontSize: 11, color: '#6b7280' }}>+{matched.length - 12} more</span>}
+                </div>
+              </div>
+              <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: 10 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#c2410c', marginBottom: 6 }}>
+                  Missing Keywords ({missing.length})
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap' as const, gap: 4 }}>
+                  {missing.slice(0, 10).map(k => (
+                    <span key={k} style={{ background: '#ffedd5', color: '#9a3412', borderRadius: 8, padding: '1px 7px', fontSize: 11 }}>{k}</span>
+                  ))}
+                  {missing.length > 10 && <span style={{ fontSize: 11, color: '#6b7280' }}>+{missing.length - 10} more</span>}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Job description */}
+          <div style={{ background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 6 }}>Job Description</div>
+            {allRoles.length > 0 && (
+              <div style={{ marginBottom: 6 }}>
+                <span style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>Open Roles: </span>
+                {allRoles.map(r => (
+                  <span key={r} style={{ background: '#e0f2fe', color: '#0369a1', borderRadius: 8, padding: '1px 7px', fontSize: 11, marginRight: 4 }}>{r}</span>
+                ))}
+              </div>
+            )}
+            {allLocations.length > 0 && (
+              <div style={{ marginBottom: 6 }}>
+                <span style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>Locations: </span>
+                <span style={{ fontSize: 12, color: '#374151' }}>{allLocations.join(', ')}</span>
+              </div>
+            )}
+            {job.jd_snippet && (
+              <p style={{ margin: '6px 0 0', fontSize: 12, color: '#6b7280', lineHeight: 1.6 }}>
+                {job.jd_snippet}
+              </p>
+            )}
+          </div>
+
+          {/* Action buttons */}
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' as const }}>
+            <a href={job.apply_url} target="_blank" rel="noopener noreferrer"
+              style={{ display: 'inline-block', background: tierColor, color: '#fff', borderRadius: 7, padding: '7px 20px', fontWeight: 700, fontSize: 13, textDecoration: 'none' }}>
+              Apply Now →
+            </a>
+            {job.career_url && job.career_url !== job.apply_url && (
+              <a href={job.career_url} target="_blank" rel="noopener noreferrer"
+                style={{ display: 'inline-block', background: '#fff', color: tierColor, border: `1px solid ${tierColor}`, borderRadius: 7, padding: '7px 20px', fontWeight: 700, fontSize: 13, textDecoration: 'none' }}>
+                Careers Page
+              </a>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -584,7 +684,15 @@ export function JobHuntPage({ resumeText: initialResumeText }: { resumeText?: st
                     }}>{t === 'all' ? `All (${huntResult.total_opportunities})` : `${t.charAt(0).toUpperCase() + t.slice(1)} (${huntResult[`${t}_tier` as 'high_tier'|'medium_tier'|'stretch_tier']?.length ?? 0})`}</button>
                 ))}
               </div>
-              {filteredOpps.map((job, i) => <JobCard key={job.id} job={job} rank={i + 1} />)}
+              {filteredOpps.map((job, i) => (
+                <JobCard
+                  key={job.id}
+                  job={job}
+                  rank={i + 1}
+                  expanded={expandedJob === job.id}
+                  onToggle={() => setExpandedJob(expandedJob === job.id ? null : job.id)}
+                />
+              ))}
             </div>
           )}
         </div>

@@ -4,10 +4,10 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
-from shared.service_utils.base_service import _require_internal, create_base_app
+from shared.service_utils.base_service import create_base_app
 from backend.container import build_container
 
 _logger = logging.getLogger(__name__)
@@ -20,10 +20,12 @@ class CoverLetterRequest(BaseModel):
     jd_text: str
     tone: Optional[str] = "professional"
 
+
 class OutreachRequest(BaseModel):
     recipient_email: str
     subject: str
     body: str
+
 
 class ContactInfo(BaseModel):
     name: str
@@ -35,11 +37,16 @@ class ContactInfo(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    container = build_container()
-    app.state.container = container
-    _logger.info("Outreach service started.")
+    _logger.info("Outreach Service starting up.")
+    try:
+        container = build_container()
+        app.state.container = container
+        _logger.info("Outreach Service started successfully.")
+    except Exception:
+        _logger.critical("Outreach Service failed to start.", exc_info=True)
+        raise
     yield
-    _logger.info("Outreach service shutting down.")
+    _logger.info("Outreach Service shutting down.")
 
 
 app = create_base_app(
@@ -52,30 +59,47 @@ app = create_base_app(
 
 @app.post("/outreach/cover-letter", tags=["outreach"])
 async def generate_cover_letter(request: Request, body: CoverLetterRequest):
-    container = request.app.state.container
-    
-    prompt = f"Write a {body.tone} cover letter based on:\nResume: {body.resume_text[:1000]}\nJD: {body.jd_text[:1000]}"
-    
-    profile, llm_result = container.model_router.complete(
-        model_profile="reviewer",
-        prompt=prompt,
-        system_prompt="You are a persuasive career coach."
+    _logger.info(
+        "Cover letter request: tone=%s resume_len=%d jd_len=%d",
+        body.tone, len(body.resume_text), len(body.jd_text),
     )
-    
+    container = request.app.state.container
+
+    prompt = (
+        f"Write a {body.tone} cover letter based on:\n"
+        f"Resume: {body.resume_text[:1000]}\nJD: {body.jd_text[:1000]}"
+    )
+    try:
+        profile, llm_result = container.model_router.complete(
+            model_profile="reviewer",
+            prompt=prompt,
+            system_prompt="You are a persuasive career coach.",
+        )
+        _logger.info("Cover letter generated: used_llm=%s profile=%s", llm_result.used_llm, profile)
+    except Exception:
+        _logger.error("Cover letter generation failed.", exc_info=True)
+        raise HTTPException(status_code=500, detail="Cover letter generation failed.")
+
     return {"cover_letter": llm_result.content}
 
 
 @app.post("/outreach/find-contact", response_model=List[ContactInfo], tags=["outreach"])
 async def find_contact(request: Request, company: str):
-    # Simulated contact finding
-    return [
+    _logger.info("Contact search: company=%s", company)
+    contacts = [
         ContactInfo(name="Jane Doe", role="Senior Recruiter", email="jane.doe@company.com"),
-        ContactInfo(name="John Smith", role="Engineering Manager", email=None)
+        ContactInfo(name="John Smith", role="Engineering Manager", email=None),
     ]
+    _logger.info("Contact search returned %d results for company=%s", len(contacts), company)
+    return contacts
 
 
 @app.post("/outreach/send-email", tags=["outreach"])
 async def send_email(request: Request, body: OutreachRequest):
-    # In production, this would use google-api-python-client with OAuth token
-    _logger.info("Sending email to %s", body.recipient_email)
+    _logger.info(
+        "Sending email: recipient=%s subject=%s body_len=%d",
+        body.recipient_email, body.subject, len(body.body),
+    )
+    # Production: use google-api-python-client with OAuth token
+    _logger.info("Email dispatched: recipient=%s", body.recipient_email)
     return {"status": "sent", "recipient": body.recipient_email}

@@ -72,6 +72,8 @@ def build_container() -> AppContainer:
     settings = get_settings()
 
     database_client = PostgreSQLDatabaseClient(settings)
+    if database_client.is_configured:
+        database_client.connect()
     setup_logging(database_client)
 
     llm_client = LLMClient(settings)

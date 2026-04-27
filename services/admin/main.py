@@ -24,9 +24,11 @@ class UserAdminResponse(BaseModel):
     status: str
     created_at: str
 
+
 class ApprovalRequest(BaseModel):
     user_id: str
     status: str  # approved, active, disabled
+
 
 class SecurityGroupResponse(BaseModel):
     name: str
@@ -37,12 +39,17 @@ class SecurityGroupResponse(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    container = build_container()
-    app.state.container = container
-    app.state.db = container.database_client
-    _logger.info("Admin service started.")
+    _logger.info("Admin Service starting up.")
+    try:
+        container = build_container()
+        app.state.container = container
+        app.state.db = container.database_client
+        _logger.info("Admin Service started successfully.")
+    except Exception:
+        _logger.critical("Admin Service failed to start.", exc_info=True)
+        raise
     yield
-    _logger.info("Admin service shutting down.")
+    _logger.info("Admin Service shutting down.")
 
 
 app = create_base_app(
@@ -55,13 +62,19 @@ app = create_base_app(
 
 @app.get("/admin/users", response_model=List[UserAdminResponse], tags=["admin"])
 async def list_users(request: Request, _: bool = Depends(_require_internal)):
+    _logger.info("Admin: listing all users.")
     db: PostgreSQLDatabaseClient = request.app.state.db
-    
-    with db.engine.connect() as conn:
-        from sqlalchemy import select
-        query = select(db.users).order_by(db.users.c.created_at.desc())
-        rows = conn.execute(query).mappings().all()
-        
+
+    try:
+        with db.engine.connect() as conn:
+            from sqlalchemy import select
+            query = select(db.users).order_by(db.users.c.created_at.desc())
+            rows = conn.execute(query).mappings().all()
+        _logger.info("Admin: returned %d users.", len(rows))
+    except Exception:
+        _logger.error("Admin: failed to list users.", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fetch users.")
+
     return [
         UserAdminResponse(
             id=r["id"],
@@ -69,7 +82,7 @@ async def list_users(request: Request, _: bool = Depends(_require_internal)):
             full_name=r["full_name"],
             role=r["role"],
             status=r["status"],
-            created_at=r["created_at"].isoformat()
+            created_at=r["created_at"].isoformat(),
         )
         for r in rows
     ]
@@ -77,26 +90,35 @@ async def list_users(request: Request, _: bool = Depends(_require_internal)):
 
 @app.post("/admin/approve", tags=["admin"])
 async def approve_user(request: Request, body: ApprovalRequest, _: bool = Depends(_require_internal)):
+    _logger.info("Admin: approving user_id=%s new_status=%s", body.user_id, body.status)
     db: PostgreSQLDatabaseClient = request.app.state.db
-    
-    with db.engine.begin() as conn:
-        from sqlalchemy import update
-        stmt = (
-            update(db.users)
-            .where(db.users.c.id == body.user_id)
-            .values(status=body.status)
-        )
-        result = conn.execute(stmt)
-        
-    if result.rowcount == 0:
-        raise HTTPException(status_code=404, detail="User not found.")
-        
+
+    try:
+        with db.engine.begin() as conn:
+            from sqlalchemy import update
+            result = conn.execute(
+                update(db.users)
+                .where(db.users.c.id == body.user_id)
+                .values(status=body.status)
+            )
+
+        if result.rowcount == 0:
+            _logger.warning("Admin: user not found for approval: user_id=%s", body.user_id)
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        _logger.info("Admin: user status updated: user_id=%s status=%s", body.user_id, body.status)
+    except HTTPException:
+        raise
+    except Exception:
+        _logger.error("Admin: failed to approve user_id=%s", body.user_id, exc_info=True)
+        raise HTTPException(status_code=500, detail="User approval failed.")
+
     return {"message": f"User status updated to {body.status}."}
 
 
 @app.get("/admin/security-groups", response_model=List[SecurityGroupResponse], tags=["admin"])
 async def list_security_groups(request: Request, _: bool = Depends(_require_internal)):
-    # Hardcoded for now, could be in DB
+    _logger.debug("Admin: listing security groups.")
     return [
         SecurityGroupResponse(name="admin", permissions=["*"]),
         SecurityGroupResponse(name="recruiter", permissions=["resume:read", "job:write", "outreach:send"]),

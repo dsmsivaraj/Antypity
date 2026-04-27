@@ -95,13 +95,8 @@ export interface User {
   full_name?: string
   role: string
   status: string
-}
-
-export interface UserProfile {
-  user_id: string
-  resume_filename?: string | null
-  resume_text?: string | null
-  updated_at: string
+  social_provider?: string | null
+  created_at?: string | null
 }
 
 export interface Session {
@@ -128,6 +123,7 @@ export interface ResumeParseResponse {
 
 export interface UserProfile {
   user_id: string
+  resume_filename?: string | null
   resume_text?: string | null
   resume_data?: ParsedFields | null
   preferences?: Record<string, unknown> | null
@@ -401,6 +397,12 @@ export interface JobOpportunity {
   fit_score: number
   package_lpa: string
   tier: 'high' | 'medium' | 'stretch'
+  matched_keywords?: string[]
+  missing_keywords?: string[]
+  ats_summary?: string
+  jd_snippet?: string
+  all_roles?: string[]
+  all_locations?: string[]
 }
 
 export interface TailoredApplication {

@@ -73,7 +73,7 @@ export function setStoredApiKey(value: string): void {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, _retried = false): Promise<T> {
   const apiKey = getStoredApiKey()
   const jwt = getStoredJwt()
   const headers = new Headers(init?.headers)
@@ -102,6 +102,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // Keep generic message when the response is not JSON.
     }
+
+    // If the stored key is stale/revoked, evict it and retry once with the env-var fallback.
+    if (
+      response.status === 401 &&
+      !_retried &&
+      typeof window !== 'undefined' &&
+      window.localStorage.getItem(API_KEY_STORAGE_KEY)
+    ) {
+      window.localStorage.removeItem(API_KEY_STORAGE_KEY)
+      const envKey = import.meta.env.VITE_API_KEY || ''
+      if (envKey) {
+        window.localStorage.setItem(API_KEY_STORAGE_KEY, envKey)
+      }
+      return request<T>(path, init, true)
+    }
+
     throw new Error(detail)
   }
 

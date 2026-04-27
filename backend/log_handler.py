@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import logging
+import os
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .database import PostgreSQLDatabaseClient
 
-# Loggers that write to the DB — exclude them to prevent recursion.
 _EXCLUDED_PREFIXES = ("backend.database", "sqlalchemy")
+
+# Resolved relative to the project root (two levels up from this file).
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+LOG_DIR = _PROJECT_ROOT / os.getenv("LOG_DIR", "logs")
+LOG_FILE = LOG_DIR / "app.log"
+_LOG_MAX_BYTES = 10 * 1024 * 1024  # 10 MB per file
+_LOG_BACKUP_COUNT = 5
 
 
 class _NoRecurse(logging.Filter):
@@ -41,7 +50,7 @@ class PostgreSQLLogHandler(logging.Handler):
 
 
 def setup_logging(db_client: PostgreSQLDatabaseClient) -> None:
-    """Configure application-wide logging: console + optional PostgreSQL sink."""
+    """Configure application-wide logging: console + rotating file + optional PostgreSQL sink."""
     formatter = logging.Formatter(
         fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S",
@@ -50,13 +59,29 @@ def setup_logging(db_client: PostgreSQLDatabaseClient) -> None:
     root = logging.getLogger()
     root.setLevel(logging.INFO)
 
-    # Prevent duplicate handlers when called more than once (e.g. test reloads).
+    # Prevent duplicate handlers on multiple calls (e.g. test reloads).
     existing_types = {type(h) for h in root.handlers}
 
     if logging.StreamHandler not in existing_types:
         console = logging.StreamHandler()
         console.setFormatter(formatter)
         root.addHandler(console)
+
+    if RotatingFileHandler not in existing_types:
+        try:
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            file_handler = RotatingFileHandler(
+                LOG_FILE,
+                maxBytes=_LOG_MAX_BYTES,
+                backupCount=_LOG_BACKUP_COUNT,
+                encoding="utf-8",
+            )
+            file_handler.setFormatter(formatter)
+            root.addHandler(file_handler)
+        except OSError as exc:
+            logging.getLogger(__name__).warning(
+                "Could not create log file at %s: %s — file logging disabled.", LOG_FILE, exc
+            )
 
     if db_client.is_configured and PostgreSQLLogHandler not in existing_types:
         pg_handler = PostgreSQLLogHandler(db_client)

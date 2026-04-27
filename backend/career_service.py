@@ -763,11 +763,23 @@ class CareerService:
             },
         )
         written = result.metadata.get("written_content", {})
+
+        def _flatten_bullet(b) -> str:
+            if isinstance(b, str):
+                return b
+            if isinstance(b, dict):
+                parts = [str(b.get(k, "")).strip() for k in ("action_verb", "task", "description", "quantified_result", "result") if b.get(k)]
+                return " ".join(parts) if parts else " ".join(str(v) for v in b.values() if v)
+            return str(b)
+
+        raw_bullets = written.get("experience_bullets", [])
+        bullets = [_flatten_bullet(b) for b in raw_bullets if b]
+
         return {
             "target_role": target_role,
             "written_content": {
                 "professional_summary": written.get("professional_summary", ""),
-                "experience_bullets": written.get("experience_bullets", []),
+                "experience_bullets": bullets,
                 "skills_section": written.get("skills_section", {}),
                 "objective_statement": written.get("objective_statement", ""),
                 "keywords_embedded": written.get("keywords_embedded", []),
